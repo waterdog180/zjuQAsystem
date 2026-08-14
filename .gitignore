@@ -1,0 +1,15 @@
+data/
+api_keys.py
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+.pytest_cache/
+.idea/
+.vscode/
+*.pth
+*.ckpt
+.DS_Store
