@@ -1,7 +1,7 @@
 from paras import LLMParas
 from langchain_openai import ChatOpenAI
 
-def get_llm( temperature: float = 0.1,max_retries: int = 3) -> ChatOpenAI:
+def get_llm(llm_type="normal",temperature: float = 0.1,max_retries: int = 3) -> ChatOpenAI:
     return ChatOpenAI(
         model="glm-4.6v",#LLMParas.model_name,
         openai_api_key=LLMParas.api_key,

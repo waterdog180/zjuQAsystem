@@ -1,5 +1,8 @@
 from pathlib import Path
 import api_keys
+from pydantic import BaseModel, Field
+from typing import List, Optional, Union
+
 
 ROOT_DIR = Path(r"E:\coding\zjuQA")
 RAW_PDF_DIR = ROOT_DIR / "data" / "raw_pdfs"
@@ -50,6 +53,44 @@ class MembraneData(BaseModel):
     NaCl_rejection: Optional[Union[float, str]] = Field(None, description="NaCl 截留率 (%)")
     data_sources: Optional[List[str]] = Field(default_factory=list, description="数据来源（表格/图号）")
     notes: Optional[str] = Field(None, description="特殊说明，如 estimated_from_figure")
+
+    def __str__(self):
+        """print(instance) 时自动调用，美化输出"""
+        lines = [f"===== Membrane [{self.membrane_id}] ====="]
+        lines.append(f"支撑层类型substrate: {self.substrate}")
+        lines.append(f"支撑层孔径Substrate_pore_size: {self.Substrate_pore_size} nm")
+        lines.append(f"支撑层截留分子量Substrate_MWCO: {self.Substrate_MWCO} kDa")
+        lines.append(f"支撑层水接触角Substrate_Water_contact_angle: {self.Substrate_Water_contact_angle} °")
+        lines.append(f"支撑层 zeta 电位Substrate_zeta: {self.Substrate_zeta} mV")
+        lines.append(f"支撑层粗糙度Substrate_Ra: {self.Substrate_Ra} nm")
+        lines.append(f"PIP浓度PIP_Concentration: {self.PIP_Concentration} nm")
+        lines.append(f"TMC浓度TMC_Concentration: {self.TMC_Concentration} nm")
+        lines.append(f"O/N 交联度Degree_of_crosslinking: {self.Degree_of_crosslinking}")
+        lines.append(f"皮层厚度: {self.Thickness} nm")
+        lines.append(f"有效孔径: {self.Effective_pore_size} nm")
+        lines.append(f"皮层 zeta 电位: {self.Zeta_potential} mV")
+        lines.append(f"分离层粗糙度: {self.Membrane_Ra} nm")
+        lines.append(f"纯水通量: {self.pure_water_flux} LMH/bar")
+        lines.append(f"Na₂SO₄截留: {self.Na2SO4_rejection} %")
+        lines.append(f"NaCl截留: {self.NaCl_rejection} %")
+        lines.append(f"数据来源: {', '.join(self.data_sources)}")
+        lines.append(f"特殊说明: {self.notes}")
+        '''
+        # 处理浓度字典格式化
+        pip = self.PIP_Concentration
+        tmc = self.TMC_Concentration
+        if isinstance(pip, dict):
+            lines.append(f"PIP浓度: {pip['value']} {pip['unit']}")
+        else:
+            lines.append(f"PIP浓度: {pip}")
+        if isinstance(tmc, dict):
+            lines.append(f"TMC浓度: {tmc['value']} {tmc['unit']}")
+        else:
+            lines.append(f"TMC浓度: {tmc}")
+        '''
+        if self.notes:
+            lines.append(f"备注: {self.notes}")
+        return "\n".join(lines)
 
 class PaperData(BaseModel):
     """整篇论文的提取结果"""

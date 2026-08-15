@@ -1,3 +1,5 @@
+#转用MinerU，整体弃用
+
 from paras import RAW_PDF_DIR, PRE_PDF_DIR, PAGE_DPI, MAX_IMAGES
 import fitz
 import re

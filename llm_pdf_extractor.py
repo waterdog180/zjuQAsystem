@@ -7,11 +7,20 @@ from typing import List, Optional, Union
 from paras import *
 import prompts
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import SystemMessage, HumanMessage
 import json
 from pathlib import Path
 import base64
 
 #region S1识别膜名称
+def _read_mambrane_ids(file_path: Path,mode="a") -> List[str]:
+    with open(file_path,"r",encoding="utf-8") as f:
+        data = json.load(f)
+    if mode=="c":#clear,清除列表中的"Unnamed_Membrane"
+        membranes= [m for m in data["membrane_ids"] if m != "Unnamed_Membrane"]
+    else:
+        membranes = data["membrane_ids"]
+    return membranes
 
 def identify_membranes(text: str,text_len:int=12000) -> List[str]:
     """
@@ -41,27 +50,27 @@ def set_meta_infm(dir_path):
         "article_Title":None,
         "article_Author":None,
         "article_Year":None,
-        "membrane_names":[]
+        "membrane_ids":[]
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=4, ensure_ascii=False)
     return False
 
-def is_membrane_names_got(dir_path):
-    "检测目标文件夹下meta.json是否已写入membrane_names；数组非空则返回True，无则返回False"
+def is_membrane_ids_got(dir_path):
+    "检测目标文件夹下meta.json是否已写入membrane_ids；数组非空则返回True，无则返回False"
     if set_meta_infm(dir_path):
         #读取meta.json
         with open(dir_path / "meta.json", "r", encoding="utf-8") as f:
             meta = json.load(f)
-        if meta["membrane_names"]:#检测meta["membrane_names"]是否为空数组
+        if meta["membrane_ids"]:#检测meta["membrane_ids"]是否为空数组
             return True
     return False
 
-def set_menbrane_names(dir_path_list,text_path_list,mode="n"):
+def set_menbrane_ids(dir_path_list,text_path_list,mode="n"):
     for dir_path in dir_path_list:
         set_meta_infm(dir_path)
-    """传入目标文件夹列表，检测每个文件夹下meta.json是否已写入membrane_names，对没写入的文件夹根据传入的文本地址列表，读取对应文本文件，调用identify_membranes，写入membrane_names"
-    "新增mode参数：输入n时不重复检测，只要membrane_names不为空就跳过；输入a时使用增量方法，所有文件都检测，写入检测前与新检测的膜名称并集，并在控制台打印检测前与新检测的膜名称差异"""
+    """传入目标文件夹列表，检测每个文件夹下meta.json是否已写入membrane_ids，对没写入的文件夹根据传入的文本地址列表，读取对应文本文件，调用identify_membranes，写入membrane_ids"
+    "新增mode参数：输入n时不重复检测，只要membrane_ids不为空就跳过；输入a时使用增量方法，所有文件都检测，写入检测前与新检测的膜名称并集，并在控制台打印检测前与新检测的膜名称差异"""
     if mode=="a":
         for dir_path,text_path in zip(dir_path_list,text_path_list):
             #print(f"检测文件夹：{dir_path}")
@@ -70,21 +79,21 @@ def set_menbrane_names(dir_path_list,text_path_list,mode="n"):
             membranes = identify_membranes(text,text_len=-1)#"a"模式下传入-1取消文本截断
             with open(dir_path / "meta.json", "r", encoding="utf-8") as f:
                 meta = json.load(f)
-            print(f"检测前膜名称：{meta['membrane_names']}")
+            print(f"检测前膜名称：{meta['membrane_ids']}")
             print(f"新检测膜名称：{membranes}")
-            meta["membrane_names"] = list(set(meta["membrane_names"] + membranes))
+            meta["membrane_ids"] = list(set(meta["membrane_ids"] + membranes))
             with open(dir_path / "meta.json", "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=4, ensure_ascii=False)
     elif mode=="n":
         for dir_path,text_path in zip(dir_path_list,text_path_list):
-            if not is_membrane_names_got(dir_path):
+            if not is_membrane_ids_got(dir_path):
                 with open(text_path, "r", encoding="utf-8") as f:
                     text = f.read()
                 membranes = identify_membranes(text)
                 meta_path = dir_path / "meta.json"
                 with open(meta_path, "r", encoding="utf-8") as f:
                     meta = json.load(f)
-                meta["membrane_names"] = membranes
+                meta["membrane_ids"] = membranes
                 with open(meta_path, "w", encoding="utf-8") as f:
                     json.dump(meta, f, indent=4, ensure_ascii=False)
 
@@ -129,7 +138,7 @@ def build_multimodal_messages(membrane_id: str,text: str,images: List[dict]) -> 
     return [SystemMessage(content=system_content),HumanMessage(content=human_parts)]
 
 
-def load_images_to_base64(image_dir: Path | str) -> List[dict]:
+def load_images(image_dir: Path | str) -> List[dict]:
     """
     读取文件夹下所有jpg/jpeg图片，返回字典列表
     :param image_dir: 图片文件夹路径
@@ -146,21 +155,45 @@ def load_images_to_base64(image_dir: Path | str) -> List[dict]:
     results = []
     suffix_allow = {".jpg", ".jpeg", ".JPG", ".JPEG"}
     for file_path in image_dir.iterdir():
-        # 跳过文件夹，筛选后缀
-        if not file_path.is_file():
+        if not file_path.is_file() or file_path.suffix not in suffix_allow:
             continue
-        if file_path.suffix not in suffix_allow:
-            continue
-        with open(file_path, "rb") as f:# 读取二进制并编码base64
-            img_bytes = f.read()
-            b64_str = base64.b64encode(img_bytes).decode("utf-8")
+        img_bytes = file_path.read_bytes()
+        b64_str = base64.b64encode(img_bytes).decode("utf-8")
         results.append({"name": file_path.name,"base64": b64_str})
     return results
 
 
-def get_mem_paras():
-    pass
-
+def get_mem_paras(text,img,membrane_id):
+    """
+    提取单个膜的参数
+    """
+    llm=get_llm(llm_type="membrace_get")
+    messages = build_multimodal_messages(membrane_id, text, img)
+    response = llm.invoke(messages)
+    try:
+        raw_dict = json.loads(response.content)
+    except json.JSONDecodeError:
+        print(response.content)
+        raise
+    membrane = MembraneData(**raw_dict)
+    return membrane
+def get_mem_paras_from_paper(paper_dic: Path):
+    text_path=paper_dic/"auto"/"Test_1.md"
+    meta_path=paper_dic/"auto"/"meta.json"
+    image_dir=paper_dic/"auto"/"images"
+    mem_paras_path=paper_dic/"auto"/"mem_paras.json"
+    membrane_ids=_read_mambrane_ids(meta_path,mode="c")
+    #跳过空数组
+    if len(membrane_ids)==0:
+        return
+    text=text_path.read_text(encoding="utf-8")
+    img=load_images(image_dir)
+    mem_paras=[]
+    for membrane_id in membrane_ids:
+        mem_paras.append(get_mem_paras(text,img,membrane_id))
+    json.dump(mem_paras,mem_paras_path,indent=4,ensure_ascii=False)
+    print(f"已完成{paper_dic}膜参数提取，写入{mem_paras_path}")
+    return
 
 
 if __name__ == "__main__" and False:
@@ -174,4 +207,9 @@ if __name__=="__main__" and False:
     _dir_list=[Path(f"./mineru_out/Test_{i}/auto") for i in range(1,11)]
     _text_list=[Path(f"./mineru_out/Test_{i}/auto/Test_{i}.md") for i in range(1,11)]
     _clean_meta_json(_dir_list)
-    set_menbrane_names(_dir_list,_text_list,mode="a")
+    set_menbrane_ids(_dir_list,_text_list,mode="a")
+
+
+if __name__=="__main__":
+    get_mem_paras_from_paper(Path("./data/mineru_out/Test_1"))
+    #print(response)
