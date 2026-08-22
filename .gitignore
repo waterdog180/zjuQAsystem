@@ -1,5 +1,6 @@
 data/
 api_keys.py
+pdf_controller.py
 
 __pycache__/
 *.pyc

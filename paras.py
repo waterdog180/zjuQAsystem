@@ -4,19 +4,19 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Union
 
 
-ROOT_DIR = Path(r"E:\coding\zjuQA")
+ROOT_DIR = Path(__file__).parent
 RAW_PDF_DIR = ROOT_DIR / "data" / "raw_pdfs"
 PRE_PDF_DIR = ROOT_DIR / "data" / "pre_pdfs"#由于改用mineru，此文件夹暂时弃用，改用mineru_out
 MINERU_OUT_DIR = ROOT_DIR / "data" /"mineru_out"
 MEMBRANCE_DATA_DIR = ROOT_DIR / "data" / "membranes"
 
 
-
+if False:
 # 程序启动时确保目录存在
-RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
-PRE_PDF_DIR.mkdir(parents=True, exist_ok=True)
-MINERU_OUT_DIR.mkdir(parents=True, exist_ok=True)
-MEMBRANCE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    PRE_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    MINERU_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    MEMBRANCE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 PAGE_DPI   = 200   # PDF 转图片分辨率（150=快/省token，200=均衡，300=高精度）
 MAX_IMAGES = 40    # 单篇论文最多传入图片页数（超长文章截断，避免 token 超限）?
@@ -96,3 +96,10 @@ class PaperData(BaseModel):
     """整篇论文的提取结果"""
     title: str = Field(description="论文标题")
     membranes: List[MembraneData] = Field(description="所有膜的参数列表")
+
+
+
+if __name__=="__main__":
+    print(__file__)
+    print(type(__file__))
+    print(ROOT_DIR)

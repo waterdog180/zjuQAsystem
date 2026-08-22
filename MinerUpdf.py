@@ -18,7 +18,7 @@ def get_raw_pdf_list(raw_pdf_dir: str) -> list[str]:
     return pdf_list
 
 
-async def parse_single_pdf(pdf_path: Path, out_dir=MINERU_OUT_DIR: str):
+async def parse_single_pdf(pdf_path: Path, out_dir: str=MINERU_OUT_DIR):
     # read_fn 用法和旧版完全一致，兼容图片/PDF输入
     pdf_bytes = read_fn(pdf_path)
 

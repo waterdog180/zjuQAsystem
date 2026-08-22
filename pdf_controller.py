@@ -65,7 +65,7 @@ def pdf2txt(pdf_name: str, rawPdfDir=RAW_PDF_DIR, prePdfDir=PRE_PDF_DIR):
     return True
 
 
-def pdf_to_images_base64(pdf_name: str, dpi: int = PAGE_DPI, rawPdfDir=RAW_PDF_DIR, prePdfDir=PRE_PDF_DIR)
+def pdf_to_images_base64(pdf_name: str, dpi: int = PAGE_DPI, rawPdfDir=RAW_PDF_DIR, prePdfDir=PRE_PDF_DIR):
     """
     提取PDF文件中的图片并保存为base64字符串，写入对应文件夹
     """
