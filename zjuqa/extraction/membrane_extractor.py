@@ -125,7 +125,7 @@ def membrane_paras_refit(raw_text: str) -> str:
     接收无法格式化的LLM参数返回字符串，重新格式化,仍然返回字符串
     """
     llm=get_llm(llm_type="data_fit", max_retries=1)
-    mesasage=HumanMessage(content=prompt.refit_prompt.substitute(raw_text=raw_text))
+    mesasage=HumanMessage(content=prompts.refit_prompt_template.substitute(raw_text=raw_text))
     response=llm.invoke(mesasage)
     return response.content
 
