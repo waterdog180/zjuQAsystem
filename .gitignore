@@ -1,16 +1,35 @@
+# 数据目录
 data/
+
+# API 密钥（安全：不提交到仓库）
 api_keys.py
+
+# 旧版弃用文件（已迁移至 zjuqa/pdf_processing/legacy_controller.py）
 pdf_controller.py
 
+# Python 缓存
 __pycache__/
 *.pyc
+*.pyo
+
+# 虚拟环境
 .venv/
 venv/
 .env
+
+# 日志
 *.log
+
+# 测试缓存
 .pytest_cache/
+
+# IDE
 .idea/
 .vscode/
+
+# 模型权重
 *.pth
 *.ckpt
+
+# 系统文件
 .DS_Store
