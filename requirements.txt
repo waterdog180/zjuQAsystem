@@ -2,18 +2,24 @@
 # Python 版本要求：3.11（MinerU 3.4 依赖限制）
 
 # --- 核心 LLM 框架 ---
-langchain-openai>=0.1.0
-langchain-core>=0.2.0
+langchain-openai>=0.1.0,<1.0.0
+langchain-core>=0.2.0,<1.0.0
 
 # --- 数据建模 ---
-pydantic>=2.0.0
+pydantic>=2.0.0,<3.0.0
 
 # --- PDF 预处理 ---
 # MinerU 3.4：机器学习文档解析，要求 Python 3.11
 mineru==3.4.4
-# PyMuPDF：旧版 PDF 处理（legacy_controller 使用）
-PyMuPDF>=1.23.0
+
+# PyMuPDF：仅 archive/legacy_controller.py 使用，活跃代码不依赖
+# 如需运行旧版预处理代码，取消下方注释
+# PyMuPDF>=1.23.0
 
 # --- 工具库 ---
-# pathlib 为标准库，无需安装
-# base64, json, datetime, collections 均为标准库
+# pathlib, base64, json, datetime, collections, argparse 均为标准库
+
+# --- 开发依赖（可选，用于代码检查和测试）---
+# pytest>=8.0.0      # 单元测试
+# ruff>=0.5.0        # 代码 lint + format
+# pandas>=2.0.0      # M2 机器学习阶段需要（数据处理）

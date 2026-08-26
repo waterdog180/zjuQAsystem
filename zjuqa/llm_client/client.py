@@ -10,16 +10,10 @@ client.py —— LLM 客户端封装。
     response = llm.invoke("你好")
     print(response.content)
 """
-
 from langchain_openai import ChatOpenAI
 from ..config.llm_config import LLMParas
 
-
-def get_llm(
-    llm_type: str = "normal",
-    temperature: float = 0.1,
-    max_retries: int = 3,
-) -> ChatOpenAI:
+def get_llm(llm_type: str = "normal",temperature: float = 0.1,max_retries: int = 3) -> ChatOpenAI:
     """
     创建并返回一个 ChatOpenAI 客户端实例。
 
@@ -33,7 +27,7 @@ def get_llm(
         配置好的 ChatOpenAI 实例，可直接 .invoke() 调用。
     """
     return ChatOpenAI(
-        model="glm-4.6v",  # LLMParas.model_name,
+        model=LLMParas.model_name,
         openai_api_key=LLMParas.api_key,
         openai_api_base=LLMParas.base_url,
         temperature=temperature,

@@ -137,7 +137,7 @@ zjuqa/
 │   └── llm_config.py    # 原 paras.py LLMParas + api_keys 导入
 ├── models/              # 数据模型层
 │   ├── __init__.py
-│   └── membrane.py      # MembraneData、PaperData（需求1、2 修改）
+│   └── membrane.py      # MembraneData（需求1、2 修改）
 ├── llm_client/          # LLM 客户端层
 │   ├── __init__.py
 │   └── client.py        # 原 llm.py

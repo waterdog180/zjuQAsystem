@@ -1,220 +1,339 @@
 """
 membrane_extractor.py —— 膜参数提取（S2 阶段）。
 
-对每个已识别的膜名称，构建多模态消息（文本 + 全部页面图片），
-调用多模态 LLM 提取该膜的 21 项参数。
+对每个已识别的膜名称，构建多模态消息（文本 + 页面图片），
+调用多模态 LLM 提取该膜的所有参数，以单膜粒度版本化保存。
 
-本次修改（对应项目需求 3）：
-  提取结果不再覆写 mem_paras.json，而是通过 storage 层以时间戳
-  版本化保存，并自动触发多版本均值聚合。
-
-本模块由原 llm_pdf_extractor.py 的 S2 部分迁移而来。
+本次修改（需求2/3/4/5）：
+  - 修复 P0 Bug：membrane_paras_refit 中 prompt→prompts、
+    refit_prompt→refit_prompt_template、mesasage→message
+  - 单膜保存：每个膜提取后立即写入独立目录，异常中断时已完成的膜不丢失
+  - 新路径：从 data/identified/ 读膜名，保存到 data/extracted/
+  - 自动扫描：extract_all() 脱离 Test_X 依赖
+  - mode 开关：skip/force 控制是否跳过已提取的膜
 
 使用说明：
-    from zjuqa.extraction.membrane_extractor import extract_and_save
-    extract_and_save(Path("./data/mineru_out/Test_1"))
+    from zjuqa.extraction.membrane_extractor import extract_paper, extract_all
+    # 单篇提取（自动跳过已提取的膜）
+    extract_paper("Test_1")
+    # 批量提取（自动扫描所有已识别膜名的论文）
+    extract_all(mode="skip")
 """
 
 import base64
 import json
-from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
+from pydantic import ValidationError
 
+from ..config.paths import (
+    get_meta_path,
+    get_parsed_images,
+    get_parsed_text,
+    scan_extracted_membranes,
+    scan_identified_papers,
+)
 from ..llm_client.client import get_llm
 from ..models.membrane import MembraneData
 from ..storage.membrane_repository import (
-    save_membrane_params_version,
-    aggregate_membrane_params,
+    aggregate_paper,
+    is_membrane_extracted,
+    save_membrane_version,
 )
 from . import prompts
 from .membrane_identifier import read_membrane_ids
-from ..config import MINERU_OUT_DIR, MEMBRANE_DATA_DIR
-from pydantic.error_wrappers import ValidationError
 
 
 # ====================================================================
-# 多模态消息构建
+# 图片加载工具
 # ====================================================================
 
-def build_multimodal_messages(membrane_id: str,text: str,images: List[dict],) -> List:
+def encode_image(image_path: Path) -> str:
+    """将图片文件编码为 base64 字符串。"""
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+def load_images_for_paper(
+    paper_name: str,
+    max_images: int = 40,
+) -> List[dict]:
     """
-    构建多模态消息列表：
-      - system：膜参数提取指令（含目标膜名）
-      - human：论文全文文本 + 所有页面图片（base64）+ 末尾任务强调
+    加载某篇论文的所有页面图片，编码为多模态消息格式。
 
     Args:
-        membrane_id: 目标膜名称
-        text:        论文全文文本
-        images:      页面图片列表，每项 {"name": ..., "base64": ...}
+        paper_name: 论文名称
+        max_images: 最大图片数量，超长论文截断
 
     Returns:
-        LangChain 消息列表 [SystemMessage, HumanMessage]
+        多模态消息中的图片内容列表
     """
-    system_content = prompts.mem_extract_template.substitute(membrane_id=membrane_id)
+    images_dir = get_parsed_images(paper_name)
+    if not images_dir.exists():
+        print(f"  [提取] 警告: 图片目录不存在 {images_dir}")
+        return []
 
-    human_parts = []
+    image_files = sorted(images_dir.glob("*.jpg")) + sorted(images_dir.glob("*.png"))
+    image_files = image_files[:max_images]
 
-    # 1. 文字部分
-    human_parts.append({
-        "type": "text",
-        "text": (
-            f"目标膜：{membrane_id}\n"
-            f"【论文全文（文字层）】\n{text}\n\n"
-            f"【以下为论文各页图片，请结合文字综合判断】\n"
-        ),
-    })
-
-    # 2. 图片部分（每页一张，按页码顺序）
-    for img in images:
-        human_parts.append({
+    image_contents = []
+    for img_path in image_files:
+        b64 = encode_image(img_path)
+        ext = img_path.suffix.lstrip(".")
+        mime = f"image/{ext}" if ext in ("jpeg", "jpg", "png", "webp") else "image/jpeg"
+        image_contents.append({
             "type": "image_url",
-            "image_url": {
-                "url": f"data:image/png;base64,{img['base64']}",
-                "detail": "high",  # 高精度模式，保证图表数字可读
-            },
+            "image_url": {"url": f"data:{mime};base64,{b64}"},
         })
-
-    # 3. 末尾再次强调任务
-    human_parts.append({
-        "type": "text",
-        "text": (
-            f'\n请严格只提取 "{membrane_id}" 的参数，'
-            f"综合文字和图片信息，输出纯 JSON："
-        ),
-    })
-
-    return [SystemMessage(content=system_content), HumanMessage(content=human_parts)]
+    print(f"  [提取] 加载 {len(image_contents)} 张页面图片")
+    return image_contents
 
 
 # ====================================================================
-# 图片加载
+# LLM 提取核心
 # ====================================================================
-
-def load_images(image_dir: Path | str) -> List[dict]:
-    """
-    读取文件夹下所有 jpg/jpeg 图片，返回 base64 编码的字典列表。
-
-    Args:
-        image_dir: 图片文件夹路径
-
-    Returns:    
-        [{"name": "demo.jpg", "base64": "xxxx"}, ...]
-
-    Raises:
-        NotADirectoryError: 路径不存在或不是文件夹
-    """
-    image_dir = Path(image_dir)
-    if not image_dir.is_dir():
-        raise NotADirectoryError(f"路径不存在或不是文件夹：{image_dir}")
-
-    results = []
-    suffix_allow = {".jpg", ".jpeg", ".JPG", ".JPEG"}
-    for file_path in image_dir.iterdir():
-        if not file_path.is_file() or file_path.suffix not in suffix_allow:
-            continue
-        img_bytes = file_path.read_bytes()
-        b64_str = base64.b64encode(img_bytes).decode("utf-8")
-        results.append({"name": file_path.name, "base64": b64_str})
-    return results
 
 def membrane_paras_refit(raw_text: str) -> str:
     """
-    接收无法格式化的LLM参数返回字符串，重新格式化,仍然返回字符串
-    """
-    llm=get_llm(llm_type="data_fit", max_retries=1)
-    mesasage=HumanMessage(content=prompts.refit_prompt_template.substitute(raw_text=raw_text))
-    response=llm.invoke(mesasage)
-    return response.content
+    当 LLM 首次输出非标准 JSON 时，调用纯文本 LLM 进行二次格式化。
 
-# 单膜参数提取
-
-def get_membrane_params(text: str,img: List[dict],membrane_id: str,) -> MembraneData:
-    """
-    提取单个膜的参数。
-    构建多模态消息 → 调用 LLM → 解析 JSON → 校验为 MembraneData。
+    修复记录（P0 Bug）：
+      - 原代码 prompt.refit_prompt → 修正为 prompts.refit_prompt_template
+      - 原代码 mesasage → 修正为 message
 
     Args:
-        text:        论文全文文本
-        img:         页面图片列表
-        membrane_id: 目标膜名称
+        raw_text: LLM 首次返回的非标准文本
+
     Returns:
-        MembraneData 实例
-    Raises:
-        json.JSONDecodeError: LLM 输出不是合法 JSON 时抛出，
-                              原始响应会打印到控制台供排查
+        格式化后的 JSON 字符串
     """
-    llm = get_llm(llm_type="membrace_get")
-    messages = build_multimodal_messages(membrane_id, text, img)
+    llm = get_llm()
+    messages = [
+        ("system", prompts.REFIT_SYSTEM),
+        ("human", f"需要格式化的原始输出：\n{raw_text}"),
+    ]
     response = llm.invoke(messages)
-    try:
-        raw_dict = json.loads(response.content)
-        membrane = MembraneData(**raw_dict)
-    except (json.JSONDecodeError,ValidationError):
-        print("不是合法 JSON或 MembraneData:", response.content)
-        print("启动再适配")
-        refit_text=membrane_paras_refit(response.content)
-        try:
-            raw_dict = json.loads(refit_text)
-            membrane = MembraneData(**raw_dict)
-        except (json.JSONDecodeError,ValidationError):
-            print("再适配失败：\n", refit_text)
-            raise
-    return membrane
+    return response.content.strip()
 
 
-# ====================================================================
-# 单篇论文全量提取 + 版本化保存
-# ====================================================================
-
-def extract_and_save(text_path: Path,meta_path: Path, image_dir: Path,save_dir: Path) -> None:
+def get_membrane_params(membrane_id: str,paper_text: str,image_contents: List[dict]) -> Optional[MembraneData]:
     """
-    对单篇论文执行全量膜参数提取，并以时间戳版本化保存。
+    对单个膜调用多模态 LLM 提取参数。
 
-    流程：
-      1. 读取 meta.json 中的膜名称列表（清除 Unnamed_Membrane）
-      2. 读取论文文本与页面图片
-      3. 逐膜调用多模态 LLM 提取参数
-      4. 调用 save_membrane_params_version 保存本次结果（不覆写）
-      5. 调用 aggregate_membrane_params 聚合所有历史版本取均值
+    流程：构建多模态消息 → 调用 LLM → 解析 JSON → 失败时 refit 重试。
 
     Args:
-        text_path: 论文文本文件路径
-        meta_path: 论文 meta.json 文件路径
-        image_dir: 论文图片文件夹路径
-        save_dir: 保存文件夹路径
+        membrane_id:    膜名称
+        paper_text:     论文全文文本
+        image_contents: 页面图片的多模态内容列表
+
+    Returns:
+        提取成功返回 MembraneData，失败返回 None
     """
-    paper_name=text_path.stem
-    # 读取膜名称（清除占位符）
-    membrane_ids = read_membrane_ids(meta_path, mode="c")
-    # 跳过空数组
-    if len(membrane_ids) == 0:
-        print(f"  [提取] {paper_name} 无膜名称，跳过")
-        return
-    # 读取文本与图片
-    text = text_path.read_text(encoding="utf-8")
-    img = load_images(image_dir)
+    llm = get_llm()
 
-    # 逐膜提取
-    mem_paras: List[MembraneData] = []
-    for membrane_id in membrane_ids:
-        print(f"[{datetime.now()}][提取] 正在提取: {paper_name} | {membrane_id}")
-        mem_paras.append(get_membrane_params(text, img, membrane_id))
+    # 构建多模态消息：系统提示（含膜名模板替换）+ 论文文本 + 全部图片
+    system_prompt = prompts.mem_extract_template.substitute(membrane_id=membrane_id)
+    content = [
+        {"type": "text", "text": system_prompt},
+        {"type": "text", "text": f"论文文本：\n{paper_text}"},
+    ]
+    content.extend(image_contents)
 
-    # ★ 需求 3：版本化保存（不覆写）+ 自动聚合均值
-    save_membrane_params_version(save_dir, mem_paras)
-    aggregate_membrane_params(save_dir)
+    human_msg = HumanMessage(content=content)
 
-    print(f"已完成 {text_path.name} 膜参数提取")
+    try:
+        response = llm.invoke([human_msg])
+        raw = response.content.strip()
+
+        # 尝试直接解析 JSON
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            # JSON 解析失败，调用 refit 二次格式化
+            print(f"  [提取] {membrane_id}: JSON 解析失败，尝试 refit 格式化...")
+            refitted = membrane_paras_refit(raw)
+            try:
+                data = json.loads(refitted)
+            except json.JSONDecodeError:
+                print(f"  [提取] {membrane_id}: refit 后仍无法解析，跳过")
+                return None
+
+        # 用 Pydantic 校验
+        try:
+            membrane = MembraneData(**data)
+            return membrane
+        except ValidationError as e:
+            print(f"  [提取] {membrane_id}: 数据校验失败: {e}")
+            print(f"  [提取] {membrane_id}: 尝试 refit 格式化...")
+            # 校验失败也尝试 refit
+            refitted = membrane_paras_refit(raw)
+            try:
+                data = json.loads(refitted)
+                membrane = MembraneData(**data)
+                return membrane
+            except (json.JSONDecodeError, ValidationError):
+                print(f"  [提取] {membrane_id}: refit 后校验仍失败，跳过")
+                return None
+
+    except Exception as e:
+        print(f"  [提取] {membrane_id}: LLM 调用异常: {e}")
+        return None
+
 
 # ====================================================================
-# 命令行测试入口
+# 单篇 / 批量处理（需求2：单膜保存 + 需求3：自动扫描 + 需求4：mode开关）
+# ====================================================================
+
+def extract_paper(
+    paper_name: str,
+    mode: str = "skip",
+    max_images: int = 40,
+    do_aggregate: bool = True,
+) -> dict:
+    """
+    对单篇论文的所有膜执行参数提取。
+
+    每个膜提取后立即保存（单膜粒度 checkpoint），异常中断时已完成的膜不丢失。
+    mode="skip" 时跳过已有提取结果的膜。
+
+    Args:
+        paper_name:   论文名称
+        mode:
+            "skip" ：跳过已提取的膜（默认，避免重复计算）
+            "force"：全部重新提取，覆盖已有版本
+        max_images:   最大图片数量
+        do_aggregate: 提取完成后是否执行均值聚合
+
+    Returns:
+        统计字典 {"total": 膜总数, "extracted": 新提取数, "skipped": 跳过数, "failed": 失败数}
+    """
+    # 读取膜名称列表
+    meta_path = get_meta_path(paper_name)
+    if not meta_path.exists():
+        print(f"  [提取] 跳过 {paper_name}: meta.json 不存在，请先运行膜名称识别")
+        return {"total": 0, "extracted": 0, "skipped": 0, "failed": 0}
+
+    membrane_ids = read_membrane_ids(paper_name, mode="c")
+    if not membrane_ids:
+        print(f"  [提取] 跳过 {paper_name}: 膜名称列表为空")
+        return {"total": 0, "extracted": 0, "skipped": 0, "failed": 0}
+
+    # 加载论文文本和图片（整篇论文共享，避免重复加载）
+    text_path = get_parsed_text(paper_name)
+    if not text_path.exists():
+        print(f"  [提取] 跳过 {paper_name}: 解析文本不存在")
+        return {"total": 0, "extracted": 0, "skipped": 0, "failed": 0}
+
+    with open(text_path, "r", encoding="utf-8") as f:
+        paper_text = f.read()
+
+    image_contents = load_images_for_paper(paper_name, max_images=max_images)
+
+    print(f"  [提取] {paper_name}: 共 {len(membrane_ids)} 种膜，mode={mode}")
+
+    extracted = 0
+    skipped = 0
+    failed = 0
+
+    for membrane_id in membrane_ids:
+        # mode="skip"：已有提取结果则跳过
+        if mode == "skip" and is_membrane_extracted(paper_name, membrane_id):
+            print(f"  [提取] 跳过 {membrane_id}（已提取）")
+            skipped += 1
+            continue
+
+        print(f"  [提取] 正在提取: {membrane_id}")
+        result = get_membrane_params(membrane_id, paper_text, image_contents)
+
+        if result is not None:
+            save_membrane_version(paper_name, membrane_id, result)
+            extracted += 1
+        else:
+            print(f"  [提取] {membrane_id}: 提取失败")
+            failed += 1
+
+    # 聚合
+    if do_aggregate and (extracted > 0 or skipped > 0):
+        aggregate_paper(paper_name, save=True)
+
+    stats = {
+        "total": len(membrane_ids),
+        "extracted": extracted,
+        "skipped": skipped,
+        "failed": failed,
+    }
+    print(
+        f"  [提取] {paper_name} 完成: "
+        f"总计 {stats['total']}, 新提取 {stats['extracted']}, "
+        f"跳过 {stats['skipped']}, 失败 {stats['failed']}"
+    )
+    return stats
+
+
+def extract_all(
+    mode: str = "skip",
+    papers: Optional[List[str]] = None,
+    max_images: int = 40,
+) -> dict:
+    """
+    批量提取所有论文的膜参数。
+
+    Args:
+        mode:
+            "skip" ：跳过已提取的膜（默认）
+            "force"：全部重新提取
+        papers:     指定论文名列表，None 时自动扫描 data/identified/
+        max_images: 最大图片数量
+
+    Returns:
+        统计字典 {"total_papers": 论文数, "total_membranes": 膜总数, ...}
+    """
+    # 自动扫描（需求3：脱离 Test_X 依赖）
+    if papers is None:
+        papers = scan_identified_papers()
+
+    if not papers:
+        print("[提取] 未找到已识别膜名的论文，请先运行膜名称识别")
+        return {"total_papers": 0, "total_membranes": 0}
+
+    print(f"[提取] 发现 {len(papers)} 篇已识别论文，mode={mode}")
+
+    total_membranes = 0
+    total_extracted = 0
+    total_skipped = 0
+    total_failed = 0
+
+    for paper_name in papers:
+        stats = extract_paper(paper_name, mode=mode, max_images=max_images)
+        total_membranes += stats["total"]
+        total_extracted += stats["extracted"]
+        total_skipped += stats["skipped"]
+        total_failed += stats["failed"]
+
+    summary = {
+        "total_papers": len(papers),
+        "total_membranes": total_membranes,
+        "total_extracted": total_extracted,
+        "total_skipped": total_skipped,
+        "total_failed": total_failed,
+    }
+    print(
+        f"[提取] 全部完成: 论文 {summary['total_papers']}, "
+        f"膜 {summary['total_membranes']}, "
+        f"新提取 {summary['total_extracted']}, "
+        f"跳过 {summary['total_skipped']}, "
+        f"失败 {summary['total_failed']}"
+    )
+    return summary
+
+
+# ====================================================================
+# 命令行入口
 # ====================================================================
 
 if __name__ == "__main__":
-    # 快速测试：对 Test_1 执行提取
-    for i in range(5):
-        num=i+6
-        extract_and_save(MINERU_OUT_DIR/f"Test_{num}"/"auto"/f"Test_{num}.md",MINERU_OUT_DIR/f"Test_{num}"/"auto"/"meta.json",MINERU_OUT_DIR/f"Test_{num}"/"auto"/"images",MEMBRANE_DATA_DIR/f"Test_{num}")
+    # 默认批量提取所有已识别论文，跳过已完成的膜
+    extract_all(mode="skip")

@@ -15,17 +15,23 @@
 ```
 zjuQAsystem/
 ├── Note.md                  # 项目规划与架构设计文档
-├── main.py                  # 统一入口（预留）
+├── main.py                  # 统一 CLI 入口（parse / identify / extract / all）
 ├── requirements.txt         # 依赖清单
 ├── api_key_example.py       # API 密钥模板（复制为 api_keys.py）
 │
+├── data/                    # 数据目录（按处理阶段分离）
+│   ├── raw/                 #   原始 PDF（不可变输入）
+│   ├── parsed/              #   阶段1：MinerU 解析输出
+│   ├── identified/          #   阶段2：膜名称识别结果
+│   └── extracted/           #   阶段3：膜参数提取结果（文章-膜两级）
+│
 └── zjuqa/                   # 核心包
     ├── config/              # 配置层（路径、LLM 参数）
-    ├── models/              # 数据模型（MembraneData 等）
+    ├── models/              # 数据模型（MembraneData 等 Pydantic 模型）
     ├── llm_client/          # LLM 客户端封装
-    ├── pdf_processing/      # PDF 预处理（MinerU + 旧版 fitz）
+    ├── pdf_processing/      # PDF 预处理（MinerU 解析）
     ├── extraction/          # 信息提取（膜名称识别 + 膜参数提取）
-    ├── storage/             # 持久化（版本化保存 + 均值聚合）
+    ├── storage/             # 持久化（单膜版本化保存 + 均值聚合）
     ├── ml/                  # 机器学习（预留）
     ├── knowledge_base/      # 知识库（预留）
     ├── qa_interface/        # 问答接口（预留）
@@ -51,22 +57,58 @@ cp api_key_example.py api_keys.py
 
 ### 2. 数据准备
 
-将 PDF 论文放入 `data/raw_pdfs/` 目录。
+将 PDF 论文放入 `data/raw/` 目录。文件名（不含扩展名）将作为论文标识符，不要求 `Test_X` 格式。
 
 ### 3. 运行流水线
 
 ```bash
-# Step 1: MinerU 解析 PDF（输出结构化 Markdown + 图片）
-python -m zjuqa.pdf_processing.mineru_parser
+# 全量运行三阶段（自动扫描 data/raw/，跳过已完成的）
+python main.py all
 
-# Step 2: 识别膜名称（写入 meta.json）
-python -m zjuqa.extraction.membrane_identifier
+# 或分阶段运行
+python main.py parse      # 阶段1：MinerU PDF 解析
+python main.py identify   # 阶段2：膜名称识别
+python main.py extract    # 阶段3：膜参数提取
 
-# Step 3: 提取膜参数（版本化保存 + 均值聚合）
-python -m zjuqa.extraction.membrane_extractor
+# 常用参数
+python main.py all --mode force        # 强制重跑（覆盖已有结果）
+python main.py extract --paper Test_1  # 只处理指定论文
+python main.py extract --max-images 20 # 限制传入图片数
 ```
 
-## 本次重构要点（v0.2）
+## 数据目录结构
+
+```
+data/
+├── raw/                          # 原始 PDF
+│   └── *.pdf
+├── parsed/                       # 阶段1：MinerU 输出
+│   └── <paper>/auto/
+│       ├── <paper>.md
+│       └── images/
+├── identified/                   # 阶段2：膜名称列表
+│   └── <paper>/meta.json
+└── extracted/                    # 阶段3：膜参数（文章-膜两级）
+    └── <paper>/
+        ├── <membrane>/
+        │   ├── versions/         # 该膜的历史版本（时间戳命名）
+        │   └── aggregated.json   # 该膜的多版本均值
+        └── _paper_aggregated.json  # 整篇论文所有膜的聚合
+```
+
+详见 [data/README.md](./data/README.md)。
+
+## 重构要点
+
+### v0.3（当前）
+
+1. **阶段化数据目录**：`raw/` → `parsed/` → `identified/` → `extracted/`，三阶段成果充分分离。
+2. **文章-膜两级分离**：每个膜独立目录，含版本历史和聚合结果，支持异常中断后单膜重启。
+3. **自动扫描**：脱离 `Test_X` 命名依赖，自动发现 `data/raw/` 下所有 PDF。
+4. **统一 CLI 入口**：`main.py` 提供 `parse`/`identify`/`extract`/`all` 子命令，`--mode skip|force` 控制重复计算。
+5. **Bug 修复**：修复 `membrane_paras_refit` 变量名错误、`import zjuqa` 触发 api_keys 强依赖、模型名硬编码等问题。
+
+### v0.2
 
 1. **MembraneData 只保留均值**：所有数值字段去除误差/标准差/范围。
 2. **截留率改为字典**：`rejections: Dict[str, float]`，智能识别所有截留物质。
@@ -79,7 +121,7 @@ python -m zjuqa.extraction.membrane_extractor
 
 ```
 PDF → MinerU 解析 → 膜名称识别(纯文本LLM) → 膜参数提取(多模态LLM)
-    → 版本化保存 → 均值聚合 → 结构化 JSON
+    → 单膜版本化保存 → 均值聚合 → 结构化 JSON
 ```
 
 ## 后续开发

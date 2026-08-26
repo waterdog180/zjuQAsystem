@@ -60,7 +60,7 @@ RAW_MEMBRANE_EXTRACT = """你是膜分离领域顶级数据提取专家，同时
   如 "Na2SO4"、"NaCl"、"MgCl2"、"CaCl2"、"Na2HPO4"、"RhB"（染料）等。
 - 扫描全文所有截留率数据，包括表格和图表，动态识别所有被截留的物质，不要遗漏。
 - 若同一物质在多处出现，取均值（按上述均值规则）。
-- 盐截留率图中注意区分不同物质S。
+- 盐截留率图中注意区分不同物质。
 
 【提取规则】
 1. 只提取与膜 "$membrane_id" 直接相关的数据，严格忽略其他膜。
@@ -94,7 +94,7 @@ RAW_MEMBRANE_EXTRACT = """你是膜分离领域顶级数据提取专家，同时
 
 # Template 实例，调用时 .substitute(membrane_id="...")
 mem_extract_template = Template(RAW_MEMBRANE_EXTRACT)
-REFIT_PROMPT="""请将如下文字重写成符合json数据格式要求的字段。
+REFIT_SYSTEM="""请将文字重写成符合json数据格式要求的字段。
 所要求的数据格式：
 1. 所有数值只保留均值，严禁保留误差/标准差/置信区间/范围。
    - 若原文为 "95.2 ± 0.3"，只提取 95.2
@@ -110,7 +110,7 @@ REFIT_PROMPT="""请将如下文字重写成符合json数据格式要求的字段
 - substrate          : 支撑层材料（PES/PVDF/PSF/PAN）
 - Substrate_pore_size: 支撑层孔径均值 (nm)
 - Substrate_MWCO     : 支撑层截留分子量均值 (kDa)
-- Substrate_Water_contact_angle: 支撑层水接触角均值 (°)
+- Substrate_Water_contact_angle: 支撑层水接触角均值，返回纯数字，不保留单位 (°)
 - Substrate_zeta     : 支撑层 zeta 电位均值 (mV)
 - Substrate_Ra       : 支撑层粗糙度均值 (nm)
 - PIP_Concentration  : PIP 浓度均值，格式 {"value": 数值, "unit": "原始单位"}
@@ -126,12 +126,9 @@ REFIT_PROMPT="""请将如下文字重写成符合json数据格式要求的字段
 - data_sources       : 数据来源列表，如 ["Table 2", "Fig. 3a"]
 - notes              : 特殊说明（估算来源、存疑数据等）
 【重要】直接输出标准JSON，不要任何解释，不要 markdown 代码块。
-
-如下是待重新格式化的字段：
-$raw_text
-请将如上文字重写成符合json数据格式要求的字段，直接输出标准JSON，不要任何解释，不要 markdown 代码块。
+请将文字重写成符合json数据格式要求的字段，直接输出标准JSON，不要任何解释，不要 markdown 代码块。
 """
-refit_prompt_template=Template(REFIT_PROMPT)
+
 
 if __name__ == "__main__":
     # 快速预览模板替换效果
