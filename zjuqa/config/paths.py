@@ -9,28 +9,25 @@ paths.py —— 项目全局路径配置。
 
 所有路径均以项目根目录为基准，避免硬编码绝对路径。
 
+注意：目录自动扫描函数已移至 zjuqa.utils.scanner，
+本文件只保留路径常量和路径辅助函数。
+
 使用说明：
     from zjuqa.config.paths import (
         RAW_PDF_DIR, PARSED_DIR, IDENTIFIED_DIR, EXTRACTED_DIR,
         get_parsed_text, get_meta_path, get_membrane_dir,
-        scan_raw_pdfs, scan_parsed_papers, scan_identified_papers,
         ensure_data_dirs,
     )
 """
 
-import json
 from pathlib import Path
-from typing import List
-
+#region 路径常量
 # 项目根目录：zjuqa/config/paths.py 的上两级
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 
-# ====================================================================
-# 阶段化数据目录（需求1：不同阶段成果充分分离）
-# ====================================================================
 
 RAW_PDF_DIR = ROOT_DIR / "data" / "raw"
-"""原始 PDF 存放目录（不可变输入）。"""
+"""原始 PDF 存放目录。"""
 
 PARSED_DIR = ROOT_DIR / "data" / "parsed"
 """阶段1：MinerU 解析输出目录。每篇论文一个子文件夹。"""
@@ -49,15 +46,14 @@ MEMBRANE_DATA_DIR = EXTRACTED_DIR
 """兼容旧引用：膜参数目录即 extracted/。"""
 
 # ====================================================================
-# 处理参数
+# 处理参数（少量手动调整参数，留在 config 层）
 # ====================================================================
 
-PAGE_DPI = 200
+PAGE_DPI = 200#未使用
 """PDF 转图片分辨率：150=快/省token，200=均衡，300=高精度。"""
 
-MAX_IMAGES = 40
+MAX_IMAGES = 60#不建议一刀切，应增加筛选机制，后续处理
 """单篇论文最多传入 LLM 的图片页数，超长文章截断避免 token 超限。"""
-
 
 # ====================================================================
 # 路径辅助函数（需求2：文章-膜两级分离）
@@ -98,7 +94,7 @@ def get_extracted_dir(paper_name: str) -> Path:
 
 def get_membrane_dir(paper_name: str, membrane_id: str) -> Path:
     """
-    获取某个膜的参数目录（膜级，需求2：文章-膜两级分离）。
+    获取某个膜的参数目录（膜级，文章-膜两级分离）。
     结构：<extracted_dir>/<paper_name>/<membrane_id>/
     膜名中的特殊字符（/ \\ 空格）会被替换为下划线。
     """
@@ -119,90 +115,6 @@ def get_membrane_aggregated_path(paper_name: str, membrane_id: str) -> Path:
 def get_paper_aggregated_path(paper_name: str) -> Path:
     """获取整篇论文所有膜的聚合结果文件路径。"""
     return get_extracted_dir(paper_name) / "_paper_aggregated.json"
-
-
-# ====================================================================
-# 自动扫描（需求3：脱离 Test_X 格式依赖）
-# ====================================================================
-
-def scan_raw_pdfs() -> List[str]:
-    """
-    扫描 data/raw/ 目录，返回所有 PDF 文件名（不含扩展名）。
-    不依赖 Test_X 命名格式，任意 PDF 文件名均可识别。
-    """
-    if not RAW_PDF_DIR.exists():
-        return []
-    return sorted([
-        f.stem for f in RAW_PDF_DIR.iterdir()
-        if f.is_file() and f.suffix.lower() == ".pdf"
-    ])
-
-
-def scan_parsed_papers() -> List[str]:
-    """
-    扫描 data/parsed/ 目录，返回已完成 MinerU 解析的论文名列表。
-    判断依据：存在 <paper_name>/auto/<paper_name>.md 文件。
-    """
-    if not PARSED_DIR.exists():
-        return []
-    result = []
-    for d in PARSED_DIR.iterdir():
-        if d.is_dir() and (d / "auto" / f"{d.name}.md").exists():
-            result.append(d.name)
-    return sorted(result)
-
-
-def scan_identified_papers() -> List[str]:
-    """
-    扫描 data/identified/ 目录，返回已完成膜名称识别的论文名列表。
-    判断依据：存在 <paper_name>/meta.json 且 membrane_ids 非空。
-    """
-    if not IDENTIFIED_DIR.exists():
-        return []
-    result = []
-    for d in IDENTIFIED_DIR.iterdir():
-        meta_path = d / "meta.json"
-        if d.is_dir() and meta_path.exists():
-            try:
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                if meta.get("membrane_ids"):
-                    result.append(d.name)
-            except (json.JSONDecodeError, OSError):
-                continue
-    return sorted(result)
-
-
-def scan_extracted_papers() -> List[str]:
-    """
-    扫描 data/extracted/ 目录，返回已有膜参数提取结果的论文名列表。
-    判断依据：论文目录下至少有一个膜子目录。
-    """
-    if not EXTRACTED_DIR.exists():
-        return []
-    result = []
-    for d in EXTRACTED_DIR.iterdir():
-        if d.is_dir():
-            membrane_dirs = [
-                sub for sub in d.iterdir()
-                if sub.is_dir() and not sub.name.startswith("_")
-            ]
-            if membrane_dirs:
-                result.append(d.name)
-    return sorted(result)
-
-
-def scan_extracted_membranes(paper_name: str) -> List[str]:
-    """
-    扫描某篇论文下已提取的膜名称列表（目录名）。
-    """
-    paper_dir = get_extracted_dir(paper_name)
-    if not paper_dir.exists():
-        return []
-    return sorted([
-        d.name for d in paper_dir.iterdir()
-        if d.is_dir() and not d.name.startswith("_")
-    ])
 
 
 # ====================================================================

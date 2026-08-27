@@ -31,21 +31,48 @@ membrane_repository.py —— 膜参数的版本化持久化与均值聚合。
     aggregate_paper("Test_1")
 """
 
-import json
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import List, Optional#, Dict, Union
 
 from ..config.paths import (
-    get_extracted_dir,
     get_membrane_aggregated_path,
-    get_membrane_dir,
     get_membrane_versions_dir,
     get_paper_aggregated_path,
-    scan_extracted_membranes,
 )
-from ..models.membrane import MembraneData
+from ..schemas.membrane import MembraneData, ValueUnit
+from ..utils.aggregation import (
+    average_value_units,
+    first_non_none,
+    merge_rejections,
+)
+from ..utils.io import load_json_safe, save_json
+from ..utils.scanner import scan_extracted_membranes
+
+
+# ====================================================================
+#region 需要聚合字段
+# ====================================================================
+
+# ValueUnit 数值字段：取均值（校验单位一致性）
+_VALUEUNIT_FIELDS = [
+    "Substrate_pore_size",
+    "Substrate_MWCO",
+    "Substrate_Water_contact_angle",
+    "Substrate_zeta",
+    "Substrate_Ra",
+    "PIP_Concentration",
+    "TMC_Concentration",
+    "Degree_of_crosslinking",
+    "Thickness",
+    "Effective_pore_size",
+    "Zeta_potential",
+    "Membrane_Ra",
+    "pure_water_flux",
+]
+
+# 字符串/类别字段：取第一个非空值
+_STRING_FIELDS = ["membrane_id", "substrate"]
 
 
 # ====================================================================
@@ -72,9 +99,7 @@ def save_membrane_version(paper_name: str,membrane_id: str,membrane: MembraneDat
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     save_path = versions_dir / f"{timestamp}.json"
 
-    with open(save_path, "w", encoding="utf-8") as f:
-        json.dump(membrane.model_dump(), f, indent=4, ensure_ascii=False)
-
+    save_json(save_path, membrane.model_dump())
     print(f"  [存储] 已保存 {paper_name}/{membrane_id} 版本: {timestamp}.json")
     return save_path
 
@@ -113,97 +138,38 @@ def load_membrane_versions(paper_name: str,membrane_id: str) -> List[MembraneDat
 
     versions: List[MembraneData] = []
     for fp in sorted(versions_dir.glob("*.json")):
+        data = load_json_safe(fp, default=None)
+        if data is None:
+            print(f"  [存储][警告] 跳过损坏版本 {fp.name}")
+            continue
         try:
-            with open(fp, "r", encoding="utf-8") as f:
-                data = json.load(f)
             versions.append(MembraneData(**data))
         except Exception as e:
-            print(f"  [存储][警告] 跳过损坏版本 {fp.name}: {e}")
+            print(f"  [存储][警告] 跳过版本 {fp.name}: {e}")
             continue
     return versions
 
 
 # ====================================================================
-# 均值聚合（单膜 + 整篇论文）
+#region 均值聚合
 # ====================================================================
-
-# 需要取均值的数值字段名
-_NUMERIC_FIELDS = [
-    "Substrate_pore_size",
-    "Substrate_MWCO",
-    "Substrate_Water_contact_angle",
-    "Substrate_zeta",
-    "Substrate_Ra",
-    "Degree_of_crosslinking",
-    "Thickness",
-    "Effective_pore_size",
-    "Zeta_potential",
-    "Membrane_Ra",
-    "pure_water_flux",
-]
-
-# 字符串/类别字段：取第一个非空值
-_STRING_FIELDS = ["membrane_id", "substrate"]
-
-# 浓度字段：取第一个非空值
-_CONC_FIELDS = ["PIP_Concentration", "TMC_Concentration"]
-
-
-def _to_float(value) -> Optional[float]:
-    """尝试将值转为 float，失败返回 None。"""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value.strip())
-        except (ValueError, AttributeError):
-            return None
-    return None
-
-def _average_numeric(values: list) -> Optional[Union[float, str]]:
-    """对一组数值取均值，全部无法转换时返回 None。"""
-    nums = [v for v in (_to_float(v) for v in values) if v is not None]
-    if not nums:
-        return None
-    return sum(nums) / len(nums)
-
-def _first_non_none(values: list):
-    """返回列表中第一个非 None 值。"""
-    for v in values:
-        if v is not None:
-            return v
-    return None
-
-def _merge_rejections(
-    rejection_dicts: List[Dict[str, Optional[Union[float, str]]]],
-) -> Dict[str, Optional[Union[float, str]]]:
-    """合并多个版本的截留率字典：按物质名分组取均值。"""
-    substance_values: Dict[str, list] = defaultdict(list)
-    for rd in rejection_dicts:
-        if not rd:
-            continue
-        for substance, val in rd.items():
-            substance_values[substance].append(val)
-
-    merged: Dict[str, Optional[Union[float, str]]] = {}
-    for substance, vals in substance_values.items():
-        merged[substance] = _average_numeric(vals)
-    return merged
-
 
 def _average_membranes(membrane_list: List[MembraneData]) -> MembraneData:
     """
     对同一膜的多个版本实例取均值聚合。
 
     聚合规则：
-      - 数值字段 → 算术均值
+      - ValueUnit 字段 → 取 value 均值，校验单位一致性（单位冲突标注 *）
       - 字符串/类别字段 → 第一个非空值
-      - 浓度字段 → 第一个非空值
       - rejections 字典 → 按物质名分组取均值
-      - data_sources → 并集去重
+      - data_sources → 并集去重（保持顺序）
       - notes → 合并为一条字符串
+
+    Args:
+        membrane_list: 同一膜的多个版本
+
+    Returns:
+        聚合后的 MembraneData
     """
     if not membrane_list:
         raise ValueError("membrane_list 不能为空")
@@ -213,10 +179,15 @@ def _average_membranes(membrane_list: List[MembraneData]) -> MembraneData:
     def collect(field: str) -> list:
         return [getattr(m, field) for m in membrane_list]
 
-    numeric_kwargs = {f: _average_numeric(collect(f)) for f in _NUMERIC_FIELDS}
-    string_kwargs = {f: _first_non_none(collect(f)) for f in _STRING_FIELDS}
-    conc_kwargs = {f: _first_non_none(collect(f)) for f in _CONC_FIELDS}
-    rejections_merged = _merge_rejections(collect("rejections"))
+    # ValueUnit 字段聚合（校验单位一致性）
+    vu_kwargs = {
+        f: average_value_units(collect(f))
+        for f in _VALUEUNIT_FIELDS
+    }
+    # 字符串字段聚合
+    str_kwargs = {f: first_non_none(collect(f)) for f in _STRING_FIELDS}
+    # 截留率字典聚合
+    rejections_merged = merge_rejections(collect("rejections"))
 
     # data_sources 并集去重（保持顺序）
     all_sources: List[str] = []
@@ -227,20 +198,24 @@ def _average_membranes(membrane_list: List[MembraneData]) -> MembraneData:
                 all_sources.append(src)
                 seen.add(src)
 
+    # notes 合并
     all_notes = [m.notes for m in membrane_list if m.notes]
     merged_notes = " | ".join(all_notes) if all_notes else None
 
     return MembraneData(
-        **numeric_kwargs,
-        **string_kwargs,
-        **conc_kwargs,
+        **vu_kwargs,
+        **str_kwargs,
         rejections=rejections_merged,
         data_sources=all_sources,
         notes=merged_notes,
     )
 
 
-def aggregate_membrane(paper_name: str,membrane_id: str,save: bool = True) -> Optional[MembraneData]:
+def aggregate_membrane(
+    paper_name: str,
+    membrane_id: str,
+    save: bool = True,
+) -> Optional[MembraneData]:
     """
     聚合单个膜的所有历史版本，取均值。
 
@@ -260,9 +235,7 @@ def aggregate_membrane(paper_name: str,membrane_id: str,save: bool = True) -> Op
 
     if save:
         agg_path = get_membrane_aggregated_path(paper_name, membrane_id)
-        agg_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(agg_path, "w", encoding="utf-8") as f:
-            json.dump(aggregated.model_dump(), f, indent=4, ensure_ascii=False)
+        save_json(agg_path, aggregated.model_dump())
         print(
             f"  [存储] 已聚合 {paper_name}/{membrane_id}: "
             f"{len(versions)} 个版本 → 均值"
@@ -271,12 +244,17 @@ def aggregate_membrane(paper_name: str,membrane_id: str,save: bool = True) -> Op
     return aggregated
 
 
-def aggregate_paper(paper_name: str,save: bool = True) -> List[MembraneData]:
+def aggregate_paper(
+    paper_name: str,
+    save: bool = True,
+) -> List[MembraneData]:
     """
     聚合整篇论文的所有膜：逐个膜聚合后合并。
+
     Args:
         paper_name: 论文名称
         save: 是否将整篇论文的聚合结果写入 _paper_aggregated.json
+
     Returns:
         该论文所有膜的聚合结果列表
     """
@@ -293,63 +271,13 @@ def aggregate_paper(paper_name: str,save: bool = True) -> List[MembraneData]:
 
     if save and aggregated:
         paper_agg_path = get_paper_aggregated_path(paper_name)
-        paper_agg_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(paper_agg_path, "w", encoding="utf-8") as f:
-            json.dump(
-                [m.model_dump() for m in aggregated],
-                f, indent=4, ensure_ascii=False,
-            )
+        save_json(
+            paper_agg_path,
+            [m.model_dump() for m in aggregated],
+        )
         print(
             f"  [存储] 已聚合论文 {paper_name}: "
             f"{len(aggregated)} 种膜 → {paper_agg_path.name}"
         )
 
     return aggregated
-
-#region 废弃代码
-# ====================================================================
-# 兼容旧接口（论文级版本化，保留供参考）
-# ====================================================================
-'''
-def save_membrane_params_version(
-    paper_dir: Path,
-    membranes: List[MembraneData],
-) -> Path:
-    """
-    [兼容旧接口] 论文级版本化保存。
-    新代码请使用 save_membrane_version（单膜粒度）。
-    此函数保留仅为向后兼容。
-    """
-    versions_dir = paper_dir / "mem_paras_versions"
-    versions_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    save_path = versions_dir / f"mem_paras_{timestamp}.json"
-    with open(save_path, "w", encoding="utf-8") as f:
-        json.dump([m.model_dump() for m in membranes], f, indent=4, ensure_ascii=False)
-    return save_path
-
-
-def aggregate_membrane_params(
-    paper_dir: Path,
-    save: bool = True,
-) -> List[MembraneData]:
-    """
-    [兼容旧接口] 论文级聚合。
-    新代码请使用 aggregate_paper（基于新目录结构）。
-    """
-    versions_dir = paper_dir / "mem_paras_versions"
-    if not versions_dir.exists():
-        return []
-    versions: List[List[MembraneData]] = []
-    for fp in sorted(versions_dir.glob("mem_paras_*.json")):
-        with open(fp, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        versions.append([MembraneData(**d) for d in data])
-    if not versions:
-        return []
-    groups: Dict[str, List[MembraneData]] = defaultdict(list)
-    for version in versions:
-        for m in version:
-            groups[m.membrane_id or "Unnamed_Membrane"].append(m)
-    return [_average_membranes(mlist) for mlist in groups.values()]
-'''

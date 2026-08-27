@@ -1,5 +1,10 @@
 """信息提取层：膜名称识别与膜参数提取。"""
-from .prompts import IDENTIFY_SYSTEM, mem_extract_template,REFIT_SYSTEM#, refit_prompt_template
+from .prompts import (
+    IDENTIFY_SYSTEM,
+    EXTRACT_SYSTEM,
+    REFIT_SYSTEM,
+    build_extract_human,
+)
 from .membrane_identifier import (
     identify_membranes,
     identify_paper,
@@ -12,5 +17,5 @@ from .membrane_extractor import (
     get_membrane_params,
     extract_paper,
     extract_all,
-    load_images_for_paper,
+    membrane_paras_refit,
 )

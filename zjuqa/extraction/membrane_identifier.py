@@ -18,25 +18,28 @@ membrane_identifier.py —— 膜名称识别（S1 阶段）。
     identify_all(mode="skip")
 """
 
-import json
-from pathlib import Path
+#import json
+#from pathlib import Path
 from typing import List, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from ..config.paths import (
-    get_meta_path,
-    get_parsed_text,
-    scan_identified_papers,
-    scan_parsed_papers,
-)
+from ..config.paths import get_meta_path, get_parsed_text
 from ..llm_client.client import get_llm
+from ..utils.io import ensure_json_file, load_json_safe, save_json
+from ..utils.scanner import scan_identified_papers, scan_parsed_papers
 from . import prompts
 
 
 # ====================================================================
 # meta.json 读写工具
 # ====================================================================
+DEFAULT_META = {
+    "article_Title": None,
+    "article_Author": None,
+    "article_Year": None,
+    "membrane_ids": [],
+}
 
 def read_membrane_ids(paper_name: str, mode: str = "a") -> List[str]:
     """
@@ -49,16 +52,12 @@ def read_membrane_ids(paper_name: str, mode: str = "a") -> List[str]:
     Returns:
         膜名称列表，meta.json 不存在时返回空列表
     """
-    meta_path = get_meta_path(paper_name)
-    if not meta_path.exists():
-        return []
-    with open(meta_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = load_json_safe(get_meta_path(paper_name), default={"membrane_ids": []})
     if mode == "c":
-        return [m for m in data["membrane_ids"] if m != "Unnamed_Membrane"]
-    return data["membrane_ids"]
+        return [m for m in data.get("membrane_ids", []) if m != "Unnamed_Membrane"]
+    return data.get("membrane_ids", [])
 
-
+'''
 def _ensure_meta(paper_name: str) -> dict:
     """确保 meta.json 存在，返回其内容。不存在则创建默认空结构。"""
     meta_path = get_meta_path(paper_name)
@@ -83,7 +82,7 @@ def _write_meta(paper_name: str, meta: dict) -> None:
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=4, ensure_ascii=False)
-
+'''
 
 def is_membrane_ids_got(paper_name: str) -> bool:
     """
@@ -95,16 +94,13 @@ def is_membrane_ids_got(paper_name: str) -> bool:
     Returns:
         True 表示已有膜名称；False 表示无或为空
     """
-    meta_path = get_meta_path(paper_name)
-    if not meta_path.exists():
+    data = load_json_safe(get_meta_path(paper_name), default=None)
+    if data is None:
         return False
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-    return bool(meta.get("membrane_ids"))
-
+    return bool(data.get("membrane_ids"))
 
 # ====================================================================
-# LLM 膜名称识别
+#region LLM膜名识别
 # ====================================================================
 
 def identify_membranes(text: str, text_len: int = 12000) -> List[str]:
@@ -121,7 +117,7 @@ def identify_membranes(text: str, text_len: int = 12000) -> List[str]:
     Returns:
         识别到的膜名称列表
     """
-    llm = get_llm()
+    llm = get_llm(llm_type="identify")
     truncated = text[:text_len] if text_len > 0 else text
 
     prompt = ChatPromptTemplate.from_messages([
@@ -166,29 +162,23 @@ def identify_paper(paper_name: str,mode: str = "n",text_len: int = -1) -> Option
         print(f"  [识别] 跳过 {paper_name}: 已有膜名称")
         return read_membrane_ids(paper_name)
 
-    # 读取文本
     with open(text_path, "r", encoding="utf-8") as f:
         text = f.read()
 
-    # 调用 LLM 识别
     membranes = identify_membranes(text, text_len=text_len)
+    meta = ensure_json_file(get_meta_path(paper_name), default=DEFAULT_META)
 
-    # 写入 meta.json
-    meta = _ensure_meta(paper_name)
-
-    if mode == "a":
-        # 增量：取并集
+    if mode == "a":# 增量：取并集
         print(f"  [识别] {paper_name} 增量合并: 旧={meta['membrane_ids']} + 新={membranes}")
         meta["membrane_ids"] = list(set(meta["membrane_ids"] + membranes))
-    else:
-        # n(无旧值时) / c / f：覆盖
+    else:# n(无旧值时) / c / f：覆盖
         meta["membrane_ids"] = membranes
 
-    _write_meta(paper_name, meta)
+    save_json(get_meta_path(paper_name), meta)
     print(f"  [识别] {paper_name} 完成，共 {len(meta['membrane_ids'])} 种膜")
     return meta["membrane_ids"]
 
-
+#region 批量处理
 def identify_all(mode: str = "skip",papers: Optional[List[str]] = None) -> dict:
     """
     批量识别所有论文的膜名称。
@@ -203,7 +193,7 @@ def identify_all(mode: str = "skip",papers: Optional[List[str]] = None) -> dict:
     Returns:
         统计字典 {"total": 总数, "processed": 处理数, "skipped": 跳过数}
     """
-    # 自动扫描（需求3：脱离 Test_X 依赖）
+    # 自动扫描
     if papers is None:
         papers = scan_parsed_papers()
 

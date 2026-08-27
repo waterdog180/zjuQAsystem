@@ -1,7 +1,9 @@
-"""配置层：路径常量与 LLM 参数。
+"""
+配置层：路径常量与 LLM 参数。
 
-注意：本包不自动导入 LLMParas，避免 import config 时触发 api_keys 强依赖。
-需要 LLM 配置时请显式 from zjuqa.config.llm_config import LLMParas。
+注意：
+  - 本包不自动导入 LLMParas，避免 import config 时触发 api_keys 强依赖。
+  - 目录自动扫描函数已移至 zjuqa.utils.scanner。
 """
 from .paths import (
     ROOT_DIR,
@@ -13,8 +15,14 @@ from .paths import (
     PAGE_DPI,
     MAX_IMAGES,
     ensure_data_dirs,
-    scan_raw_pdfs,
-    scan_parsed_papers,
-    scan_identified_papers,
-    scan_extracted_papers,
+    get_parsed_dir,
+    get_parsed_text,
+    get_parsed_images,
+    get_identified_dir,
+    get_meta_path,
+    get_extracted_dir,
+    get_membrane_dir,
+    get_membrane_versions_dir,
+    get_membrane_aggregated_path,
+    get_paper_aggregated_path,
 )

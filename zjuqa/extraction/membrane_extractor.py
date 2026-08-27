@@ -20,32 +20,34 @@ membrane_extractor.py —— 膜参数提取（S2 阶段）。
     extract_all(mode="skip")
 """
 
-import base64
+#import base64
 import json
-from pathlib import Path
+#from pathlib import Path
 from typing import List, Optional
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
 from ..config.paths import (
     get_meta_path,
-    get_parsed_images,
+    #get_parsed_images,
     get_parsed_text,
-    scan_extracted_membranes,
-    scan_identified_papers,
+    #scan_extracted_membranes,
+    #scan_identified_papers,
 )
 from ..llm_client.client import get_llm
-from ..models.membrane import MembraneData
+from ..schemas.membrane import MembraneData
 from ..storage.membrane_repository import (
     aggregate_paper,
     is_membrane_extracted,
     save_membrane_version,
 )
+from ..utils.image import load_images_for_paper
+from ..utils.scanner import scan_identified_papers
 from . import prompts
 from .membrane_identifier import read_membrane_ids
 
-
+'''
 # ====================================================================
 # 图片加载工具
 # ====================================================================
@@ -89,7 +91,7 @@ def load_images_for_paper(
         })
     print(f"  [提取] 加载 {len(image_contents)} 张页面图片")
     return image_contents
-
+'''
 
 # ====================================================================
 # LLM 提取核心
@@ -99,23 +101,23 @@ def membrane_paras_refit(raw_text: str) -> str:
     """
     当 LLM 首次输出非标准 JSON 时，调用纯文本 LLM 进行二次格式化。
 
-    修复记录（P0 Bug）：
-      - 原代码 prompt.refit_prompt → 修正为 prompts.refit_prompt_template
-      - 原代码 mesasage → 修正为 message
-
     Args:
         raw_text: LLM 首次返回的非标准文本
 
     Returns:
-        格式化后的 JSON 字符串
+        格式化后的 JSON 字符串；失败时返回空字符串
     """
-    llm = get_llm()
+    llm = get_llm(llm_type="refit")
     messages = [
-        ("system", prompts.REFIT_SYSTEM),
-        ("human", f"需要格式化的原始输出：\n{raw_text}"),
+        SystemMessage(content=prompts.REFIT_SYSTEM),
+        HumanMessage(content=f"需要格式化的原始输出：\n{raw_text}"),
     ]
-    response = llm.invoke(messages)
-    return response.content.strip()
+    try:
+        response = llm.invoke(messages)
+        return response.content.strip()
+    except Exception as e:
+        print(f"  [refit] 格式化调用失败: {e}")
+        return ""
 
 
 def get_membrane_params(membrane_id: str,paper_text: str,image_contents: List[dict]) -> Optional[MembraneData]:
@@ -132,20 +134,13 @@ def get_membrane_params(membrane_id: str,paper_text: str,image_contents: List[di
     Returns:
         提取成功返回 MembraneData，失败返回 None
     """
-    llm = get_llm()
+    llm = get_llm(llm_type="extractor")
 
-    # 构建多模态消息：系统提示（含膜名模板替换）+ 论文文本 + 全部图片
-    system_prompt = prompts.mem_extract_template.substitute(membrane_id=membrane_id)
-    content = [
-        {"type": "text", "text": system_prompt},
-        {"type": "text", "text": f"论文文本：\n{paper_text}"},
-    ]
-    content.extend(image_contents)
-
-    human_msg = HumanMessage(content=content)
-
+    # 构建消息：SystemMessage（通用规则）+ HumanMessage（膜名+文本+图片）
+    system_msg = SystemMessage(content=prompts.EXTRACT_SYSTEM)
+    human_msg = HumanMessage(content=prompts.build_extract_human(membrane_id, paper_text, image_contents))
     try:
-        response = llm.invoke([human_msg])
+        response = llm.invoke([system_msg, human_msg])
         raw = response.content.strip()
 
         # 尝试直接解析 JSON
@@ -161,13 +156,12 @@ def get_membrane_params(membrane_id: str,paper_text: str,image_contents: List[di
                 print(f"  [提取] {membrane_id}: refit 后仍无法解析，跳过")
                 return None
 
-        # 用 Pydantic 校验
+        # 用 Pydantic 校验（ValueUnit 格式自动解析）
         try:
             membrane = MembraneData(**data)
             return membrane
         except ValidationError as e:
-            print(f"  [提取] {membrane_id}: 数据校验失败: {e}")
-            print(f"  [提取] {membrane_id}: 尝试 refit 格式化...")
+            print(f"  [提取] {membrane_id}: 数据校验失败,尝试 refit 格式化: {e}")
             # 校验失败也尝试 refit
             refitted = membrane_paras_refit(raw)
             try:
@@ -177,22 +171,17 @@ def get_membrane_params(membrane_id: str,paper_text: str,image_contents: List[di
             except (json.JSONDecodeError, ValidationError):
                 print(f"  [提取] {membrane_id}: refit 后校验仍失败，跳过")
                 return None
-
     except Exception as e:
         print(f"  [提取] {membrane_id}: LLM 调用异常: {e}")
         return None
 
 
 # ====================================================================
-# 单篇 / 批量处理（需求2：单膜保存 + 需求3：自动扫描 + 需求4：mode开关）
+#region 单篇/批量处理
+#（需求2：单膜保存 + 需求3：自动扫描 + 需求4：mode开关）
 # ====================================================================
 
-def extract_paper(
-    paper_name: str,
-    mode: str = "skip",
-    max_images: int = 40,
-    do_aggregate: bool = True,
-) -> dict:
+def extract_paper(paper_name: str,mode: str = "skip",max_images: int = 40,do_aggregate: bool = True) -> dict:
     """
     对单篇论文的所有膜执行参数提取。
 
@@ -273,11 +262,7 @@ def extract_paper(
     return stats
 
 
-def extract_all(
-    mode: str = "skip",
-    papers: Optional[List[str]] = None,
-    max_images: int = 40,
-) -> dict:
+def extract_all(mode: str = "skip",papers: Optional[List[str]] = None,max_images: int = 40) -> dict:
     """
     批量提取所有论文的膜参数。
 
@@ -291,7 +276,7 @@ def extract_all(
     Returns:
         统计字典 {"total_papers": 论文数, "total_membranes": 膜总数, ...}
     """
-    # 自动扫描（需求3：脱离 Test_X 依赖）
+    # 自动扫描
     if papers is None:
         papers = scan_identified_papers()
 
@@ -329,11 +314,9 @@ def extract_all(
     )
     return summary
 
-
 # ====================================================================
-# 命令行入口
+#region 命令行入口
 # ====================================================================
-
 if __name__ == "__main__":
     # 默认批量提取所有已识别论文，跳过已完成的膜
     extract_all(mode="skip")

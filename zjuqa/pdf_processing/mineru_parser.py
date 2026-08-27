@@ -30,13 +30,8 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from ..config.paths import (
-    PARSED_DIR,
-    RAW_PDF_DIR,
-    get_parsed_text,
-    scan_parsed_papers,
-    scan_raw_pdfs,
-)
+from ..config.paths import PARSED_DIR, RAW_PDF_DIR, get_parsed_text
+from ..utils.scanner import scan_parsed_papers, scan_raw_pdfs
 
 # ====================================================================
 # MinerU 环境配置（必须在导入 mineru 之前设置）
@@ -95,7 +90,7 @@ def _mineru_parse_single(pdf_path: Path, output_dir: Path) -> None:
         parse_method="auto",
         formula_enable=True,
         table_enable=True,
-        # 精简输出：只保留 Markdown 和图片
+        #region 精简输出：只保留 Markdown 和图片,额外需求在此开启
         f_dump_md=True,
         f_dump_middle_json=False,
         f_dump_model_output=False,
@@ -149,10 +144,7 @@ def parse_pdf(pdf_path: str | Path, force: bool = False) -> Optional[Path]:
 # 批量处理（自动扫描 + mode 开关）
 # ====================================================================
 
-def parse_all(
-    mode: str = "skip",
-    pdf_files: Optional[List[str | Path]] = None,
-) -> dict:
+def parse_all(mode: str = "skip",pdf_files: Optional[List[str | Path]] = None) -> dict:
     """
     批量解析 data/raw/ 下的所有 PDF。
 
