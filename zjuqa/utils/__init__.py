@@ -10,6 +10,7 @@ utils —— 通用工具包。
     io.py          JSON 文件读写工具
     logging.py     统一日志配置
     cleanup.py     各阶段中间数据一键清理工具
+    analytics.py   数据分析统计工具（缺失率统计、单位分布统计）
 
 使用说明：
     from zjuqa.utils import (
@@ -20,6 +21,7 @@ utils —— 通用工具包。
         load_json_safe, save_json, ensure_json_file,
         get_logger,
         clean_stage, clean_paper, STAGES,
+        report_missing_data, report_unit_distribution,
     )
 """
 
@@ -39,6 +41,7 @@ from .aggregation import (
 from .io import load_json_safe, save_json, ensure_json_file
 from .logging import get_logger
 from .cleanup import clean_stage, clean_paper, STAGES
+from .analytics import report_missing_data, report_unit_distribution
 
 __all__ = [
     "scan_raw_pdfs", "scan_parsed_papers", "scan_identified_papers",
@@ -48,4 +51,5 @@ __all__ = [
     "load_json_safe", "save_json", "ensure_json_file",
     "get_logger",
     "clean_stage", "clean_paper", "STAGES",
+    "report_missing_data", "report_unit_distribution",
 ]

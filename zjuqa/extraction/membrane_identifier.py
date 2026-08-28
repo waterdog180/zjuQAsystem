@@ -125,7 +125,11 @@ def identify_membranes(text: str, text_len: int = 12000) -> List[str]:
         ("human", "论文文本如下：\n\n{text}\n\n请输出所有膜名称（逗号分隔）："),
     ])
     chain = prompt | llm
-    response = chain.invoke({"text": truncated})
+    try:
+        response = chain.invoke({"text": truncated})
+    except :
+        print(f"  [识别] 识别调用失败")
+        return []
     raw = response.content.strip()
     membranes = [m.strip() for m in raw.split(",") if m.strip()]
     print(f"  [识别] 识别到 {len(membranes)} 种膜: {membranes}")

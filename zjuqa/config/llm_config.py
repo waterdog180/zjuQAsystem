@@ -21,7 +21,7 @@ class LLMParas:
         base_url:   API 端点地址。
         api_key:    API 密钥，从 api_keys.GLM_KEY 读取。
     """
-    model_name = "glm-4.6v-flash"
+    model_name = "glm-4.6v"
     """模型名称。"""
 
     base_url = "https://open.bigmodel.cn/api/paas/v4/"
