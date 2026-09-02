@@ -17,7 +17,7 @@ membrane_repository.py —— 膜参数的版本化持久化与均值聚合。
     └── _paper_aggregated.json         # 整篇论文所有膜的聚合
 
 使用说明：
-    from zjuqa.storage.membrane_repository import (
+    from zjuqa.utils.storage.membrane_repository import (
         save_membrane_version, is_membrane_extracted,
         aggregate_membrane, aggregate_paper, load_membrane_versions,
     )
@@ -35,19 +35,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional#, Dict, Union
 
-from ..config.paths import (
+from ..path_utils import (
     get_membrane_aggregated_path,
     get_membrane_versions_dir,
     get_paper_aggregated_path,
 )
-from ..schemas.membrane import MembraneData, ValueUnit
-from ..utils.aggregation import (
+from zjuqa.schemas.membrane import MembraneData, ValueUnit
+from ..aggregation import (
     average_value_units,
     first_non_none,
     merge_rejections,
 )
-from ..utils.io import load_json_safe, save_json
-from ..utils.scanner import scan_extracted_membranes
+from ..io import load_json_safe, save_json
+from ..scanner import scan_extracted_membranes
 
 
 # ====================================================================

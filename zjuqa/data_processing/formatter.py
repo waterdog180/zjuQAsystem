@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from ..config.paths import get_membrane_aggregated_path, get_paper_aggregated_path
+from ..utils.path_utils import get_membrane_aggregated_path, get_paper_aggregated_path
 from ..schemas.membrane import MembraneData, ValueUnit
 from ..utils.io import load_json_safe
 from ..utils.scanner import scan_extracted_membranes, scan_extracted_papers

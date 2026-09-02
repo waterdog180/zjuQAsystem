@@ -28,7 +28,10 @@ from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
 
-from ..config.paths import get_parsed_images, get_parsed_images_cleaned, get_parsed_text
+from ..utils.logging import get_logger
+from ..utils.path_utils import get_parsed_images, get_parsed_images_cleaned, get_parsed_text
+
+logger = get_logger(__name__)
 
 
 # ====================================================================
@@ -135,11 +138,11 @@ def clean_paper_images(
 
     if not md_path.exists():
         if verbose:
-            print(f"  [图片清洗] {paper_name}: markdown 不存在，跳过")
+            logger.debug(f"{paper_name}: markdown 不存在，跳过")
         return report
 
     if verbose:
-        print(f"  [图片清洗] {paper_name}: 阈值≥{min_width}×≥{min_height}px" + (" [dry-run]" if dry_run else ""))
+        logger.debug(f"{paper_name}: 阈值≥{min_width}×≥{min_height}px" + (" [dry-run]" if dry_run else ""))
 
     # 1. 读取 markdown
     with open(md_path, "r", encoding="utf-8") as f:
@@ -231,12 +234,18 @@ def clean_paper_images(
 
     # 6. 打印报告
     if verbose:
-        print(f"    找到 {report.total_found} 引用，保留 {report.kept}，删除 {report.removed}，缺失 {report.missing}")
+        logger.debug(
+            f"{paper_name}: 找到 {report.total_found} 引用，"
+            f"保留 {report.kept}，删除 {report.removed}，缺失 {report.missing}"
+        )
         if not dry_run:
-            print(f"    清洗后图片 → {cleaned_dir.name}/ ({report.kept} 张)")
+            logger.debug(f"清洗后图片 → {cleaned_dir.name}/ ({report.kept} 张)")
             for entry in entries:
                 if not entry.kept and entry.width > 0:
-                    print(f"      删除: {Path(entry.original_path).name} ({entry.width}×{entry.height})")
+                    logger.debug(
+                        f"删除: {Path(entry.original_path).name} "
+                        f"({entry.width}×{entry.height})"
+                    )
 
     return report
 

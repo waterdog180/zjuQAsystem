@@ -42,7 +42,8 @@ import argparse
 import sys
 from typing import List, Optional
 
-from zjuqa.config.paths import ensure_data_dirs
+from zjuqa.config.paths import RAW_PDF_DIR
+from zjuqa.utils.path_utils import ensure_data_dirs
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -64,10 +65,20 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 def cmd_parse(args: argparse.Namespace) -> None:
     """处理 parse 子命令：MinerU PDF 解析。"""
     from zjuqa.pdf_processing.mineru_parser import parse_all, parse_pdf
-    from zjuqa.config.paths import RAW_PDF_DIR
 
     if args.paper:
+        # 指定论文名称时，先试原始文件名，再用合规名称反查
+        from zjuqa.utils.path_utils import get_raw_pdf_path
+        from zjuqa.utils.scanner import sanitize_paper_name
+
+        # 方式1：用户传入原始文件名（含空格等）
         pdf_path = RAW_PDF_DIR / f"{args.paper}.pdf"
+        if not pdf_path.exists():
+            # 方式2：用户传入合规名称，反查原始文件
+            pdf_path = get_raw_pdf_path(sanitize_paper_name(args.paper))
+        if pdf_path is None or not pdf_path.exists():
+            print(f"[解析] 未找到原始 PDF: {args.paper}")
+            return
         parse_pdf(pdf_path, force=(args.mode == "force"))
     else:
         parse_all(mode=args.mode)

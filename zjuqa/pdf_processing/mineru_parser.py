@@ -4,14 +4,6 @@ mineru_parser.py —— 基于 MinerU 的 PDF 预处理。
 使用 MinerU 3.4 的 Python API（mineru.cli.common.do_parse）对 PDF 进行结构化解析，
 输出结构化 Markdown 文本和页面图片，供后续膜名称识别和参数提取使用。
 
-本次重写（修复 _mineru_parse_single 的多处 bug）：
-  - 修正导入路径：mineru.cli.api → mineru.cli.common
-  - 修正参数签名：Task 对象 → pdf_file_names + pdf_bytes_list + p_lang_list
-  - 新增 read_fn 读取 PDF 为 bytes（API 要求传入字节流而非路径）
-  - 设备通过环境变量 MINERU_DEVICE_MODE 设置，而非函数参数
-  - 精简输出文件：只保留 .md 和 images/，关闭 middle_json/model_output 等
-  - 默认模型源 modelscope（国内可访问），设备 cpu
-
 输出目录结构（与 paths.py 中的 get_parsed_text / get_parsed_images 匹配）：
     data/parsed/<paper_name>/auto/
     ├── <paper_name>.md       # 结构化 Markdown 全文
@@ -30,8 +22,13 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from ..config.paths import PARSED_DIR, RAW_PDF_DIR, get_parsed_text
-from ..utils.scanner import scan_parsed_papers, scan_raw_pdfs
+from ..config.paths import PARSED_DIR, RAW_PDF_DIR
+from ..utils.logging import get_logger
+from ..utils.path_utils import get_parsed_text
+from ..utils.progress import ProgressBar
+from ..utils.scanner import scan_parsed_papers, sanitize_paper_name
+
+logger = get_logger(__name__)
 
 # ====================================================================
 # MinerU 环境配置（必须在导入 mineru 之前设置）
@@ -47,7 +44,7 @@ os.environ.setdefault("MINERU_DEVICE_MODE", "cpu")
 # MinerU 解析核心
 # ====================================================================
 
-def _mineru_parse_single(pdf_path: Path, output_dir: Path) -> None:
+def _mineru_parse_single(pdf_path: Path, output_dir: Path, paper_name: str) -> None:
     """
     调用 MinerU 同步 API 解析单个 PDF。
 
@@ -55,12 +52,13 @@ def _mineru_parse_single(pdf_path: Path, output_dir: Path) -> None:
     无需 asyncio，比 aio_do_parse 更简洁可靠）。
 
     Args:
-        pdf_path:   PDF 文件路径
-        output_dir: 输出根目录（MinerU 会在其下创建 <stem>/auto/）
+        pdf_path:   PDF 文件路径（原始文件，含空格等不影响读取）
+        output_dir: 输出根目录（MinerU 会在其下创建 <paper_name>/auto/）
+        paper_name: 合规后的论文名称，用作 MinerU 输出子目录名和 markdown 文件名
 
     输出：
-        <output_dir>/<stem>/auto/<stem>.md
-        <output_dir>/<stem>/auto/images/*.jpg
+        <output_dir>/<paper_name>/auto/<paper_name>.md
+        <output_dir>/<paper_name>/auto/images/*.jpg
     """
     # 延迟导入：避免 import 本模块时就加载 MinerU（重依赖）
     from mineru.cli.common import do_parse, read_fn
@@ -71,26 +69,17 @@ def _mineru_parse_single(pdf_path: Path, output_dir: Path) -> None:
     pdf_bytes = read_fn(pdf_path)
 
     # 步骤2：调用 do_parse
-    # 参数说明（MinerU 3.4 官方签名）：
-    #   output_dir        输出根目录
-    #   pdf_file_names    文件名列表（不含扩展名），用于创建子目录
-    #   pdf_bytes_list    PDF 字节流列表，与 pdf_file_names 一一对应
-    #   p_lang_list       每篇文档的 OCR 语言列表（化工论文通常为英文）
-    #   backend           处理后端：pipeline（传统多模型流水线）
-    #   parse_method      解析方式：auto（自动判断文本/扫描）
-    #   formula_enable    公式识别（化工论文含公式，开启）
-    #   table_enable      表格识别（膜参数多在表格中，必须开启）
-    #   f_dump_*          输出文件控制：只保留 .md，关闭其他冗余文件
+    # pdf_file_names 使用合规名称，确保输出目录与后续路径一致
     do_parse(
         output_dir=str(output_dir),
-        pdf_file_names=[pdf_path.stem],
+        pdf_file_names=[paper_name],
         pdf_bytes_list=[pdf_bytes],
         p_lang_list=["en"],
         backend="pipeline",
         parse_method="auto",
         formula_enable=True,
         table_enable=True,
-        #region 精简输出：只保留 Markdown 和图片,额外需求在此开启
+        # 精简输出：只保留 Markdown 和图片
         f_dump_md=True,
         f_dump_middle_json=False,
         f_dump_model_output=False,
@@ -114,43 +103,44 @@ def parse_pdf(pdf_path: str | Path, force: bool = False) -> Optional[Path]:
     """
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
-        print(f"  [解析] 文件不存在: {pdf_path}")
+        logger.warning(f"文件不存在: {pdf_path}")
         return None
 
-    paper_name = pdf_path.stem
+    # 内部使用合规名称（不修改原始文件）
+    paper_name = sanitize_paper_name(pdf_path.stem)
     text_path = get_parsed_text(paper_name)
 
     # 跳过已解析的
     if not force and text_path.exists():
-        print(f"  [解析] 跳过 {paper_name}（已解析）")
+        logger.info(f"跳过 {paper_name}（已解析）")
         return text_path
 
-    print(f"  [解析] 正在解析: {paper_name}")
+    logger.info(f"正在解析: {paper_name} (原始文件: {pdf_path.name})")
     try:
-        _mineru_parse_single(pdf_path, PARSED_DIR)
+        _mineru_parse_single(pdf_path, PARSED_DIR, paper_name)
     except Exception as e:
-        print(f"  [解析] {paper_name} 解析失败: {e}")
+        logger.error(f"{paper_name} 解析失败: {e}", exc_info=True)
         return None
 
     if text_path.exists():
-        print(f"  [解析] 完成: {paper_name} → {text_path}")
+        logger.info(f"完成: {paper_name} → {text_path}")
         # 解析成功后自动清洗图片（删除小图+按文中顺序重编号）
         try:
             from .image_cleaner import clean_paper_images
-            clean_paper_images(paper_name, verbose=True)
+            clean_paper_images(paper_name, verbose=False)
         except Exception as e:
-            print(f"  [图片清洗] {paper_name} 清洗失败（不影响解析结果）: {e}")
+            logger.warning(f"{paper_name} 图片清洗失败（不影响解析结果）: {e}")
         return text_path
     else:
-        print(f"  [解析] 警告: 解析后未找到输出文件 {text_path}")
+        logger.warning(f"解析后未找到输出文件 {text_path}")
         return None
 
 
 # ====================================================================
-# 批量处理（自动扫描 + mode 开关）
+# 批量处理（自动扫描 + mode 开关 + 进度条）
 # ====================================================================
 
-def parse_all(mode: str = "skip",pdf_files: Optional[List[str | Path]] = None) -> dict:
+def parse_all(mode: str = "skip", pdf_files: Optional[List[str | Path]] = None) -> dict:
     """
     批量解析 data/raw/ 下的所有 PDF。
 
@@ -163,10 +153,15 @@ def parse_all(mode: str = "skip",pdf_files: Optional[List[str | Path]] = None) -
     Returns:
         统计字典 {"total": 总数, "parsed": 解析数, "skipped": 跳过数, "failed": 失败数}
     """
-    # 自动扫描（脱离 Test_X 依赖）
+    # 自动扫描：直接遍历 RAW_PDF_DIR，避免 scan→反查的间接层
     if pdf_files is None:
-        pdf_names = scan_raw_pdfs()
-        pdf_files = [RAW_PDF_DIR / f"{name}.pdf" for name in pdf_names]
+        if RAW_PDF_DIR.exists():
+            pdf_files = sorted([
+                f for f in RAW_PDF_DIR.iterdir()
+                if f.is_file() and f.suffix.lower() == ".pdf"
+            ])
+        else:
+            pdf_files = []
 
     if not pdf_files:
         print("[解析] 未找到 PDF 文件，请将论文放入 data/raw/")
@@ -179,16 +174,19 @@ def parse_all(mode: str = "skip",pdf_files: Optional[List[str | Path]] = None) -
     skipped = 0
     failed = 0
 
-    for pdf_path in pdf_files:
-        result = parse_pdf(pdf_path, force=force)
-        if result is not None:
-            parsed += 1
-        else:
-            paper_name = Path(pdf_path).stem
-            if get_parsed_text(paper_name).exists():
-                skipped += 1
+    with ProgressBar(total=len(pdf_files), prefix="解析") as bar:
+        for i, pdf_path in enumerate(pdf_files, start=1):
+            paper_name = sanitize_paper_name(Path(pdf_path).stem)
+            bar.update(i, item=paper_name, action="解析中")
+
+            result = parse_pdf(pdf_path, force=force)
+            if result is not None:
+                parsed += 1
             else:
-                failed += 1
+                if get_parsed_text(paper_name).exists():
+                    skipped += 1
+                else:
+                    failed += 1
 
     stats = {
         "total": len(pdf_files),
@@ -200,6 +198,7 @@ def parse_all(mode: str = "skip",pdf_files: Optional[List[str | Path]] = None) -
         f"[解析] 完成: 总计 {stats['total']}, "
         f"解析 {stats['parsed']}, 跳过 {stats['skipped']}, 失败 {stats['failed']}"
     )
+    logger.info(f"批量解析完成: {stats}")
     return stats
 
 

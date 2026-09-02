@@ -27,14 +27,14 @@ from .config.paths import (
     PARSED_DIR,
     IDENTIFIED_DIR,
     EXTRACTED_DIR,
-    PRE_PDF_DIR,
+    LOG_DIR,
     PAGE_DPI,
     MAX_IMAGES,
-    ensure_data_dirs,
 )
+from .utils.path_utils import ensure_data_dirs
 
 __all__ = [
     "MembraneData", "ValueUnit",
     "ROOT_DIR", "RAW_PDF_DIR", "PARSED_DIR", "IDENTIFIED_DIR", "EXTRACTED_DIR",
-    "PRE_PDF_DIR", "PAGE_DPI", "MAX_IMAGES", "ensure_data_dirs",
+    "LOG_DIR", "PAGE_DPI", "MAX_IMAGES", "ensure_data_dirs",
 ]

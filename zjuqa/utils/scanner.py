@@ -4,16 +4,21 @@ scanner.py —— 目录自动扫描工具。
 扫描各阶段数据目录，返回论文/膜名称列表。
 从 config.paths 导入目录常量，不依赖 Test_X 命名格式。
 
+原始 PDF 文件名可能包含空格等不合规字符，scan_raw_pdfs() 返回
+sanitize 后的合规名称，但不修改原始文件。通过 path_utils.get_raw_pdf_path()
+反查原始文件路径。
+
 使用说明：
     from zjuqa.utils.scanner import (
         scan_raw_pdfs, scan_parsed_papers,
         scan_identified_papers, scan_extracted_papers,
-        scan_extracted_membranes,
+        scan_extracted_membranes, sanitize_paper_name,
     )
-    papers = scan_raw_pdfs()  # 自动发现 data/raw/ 下所有 PDF
+    papers = scan_raw_pdfs()  # 自动发现 data/raw/ 下所有 PDF（返回合规名称）
 """
 
 import json
+import re
 from pathlib import Path
 from typing import List
 
@@ -22,21 +27,66 @@ from ..config.paths import (
     IDENTIFIED_DIR,
     PARSED_DIR,
     RAW_PDF_DIR,
-    get_extracted_dir,
 )
+from .path_utils import get_extracted_dir
 
+
+# ====================================================================
+# 文件名校验（不修改原始文件，仅用于内部名称规范化）
+# ====================================================================
+
+# 不合规字符：空格、路径分隔符、Windows 非法文件名字符、连续特殊字符
+_ILLEGAL_CHARS_PATTERN = re.compile(r'[\s\\/:*?"<>|]+')
+# 连续下划线合并
+_MULTI_UNDERSCORE_PATTERN = re.compile(r'_+')
+
+
+def sanitize_paper_name(name: str) -> str:
+    """
+    将论文名称转换为合规的文件/目录名（不修改原始文件，仅内部使用）。
+
+    规则：
+      - 空格及其他非法字符（\\ / : * ? " < > |）替换为下划线
+      - 连续下划线合并为一个
+      - 去除首尾下划线和点号
+      - 空名称返回 "untitled"
+
+    Args:
+        name: 原始论文名称（PDF 文件名不含扩展名）
+
+    Returns:
+        合规后的名称
+    """
+    if not name or not name.strip():
+        return "untitled"
+    cleaned = _ILLEGAL_CHARS_PATTERN.sub("_", name)
+    cleaned = _MULTI_UNDERSCORE_PATTERN.sub("_", cleaned)
+    cleaned = cleaned.strip("_.")
+    return cleaned or "untitled"
+
+
+# ====================================================================
+# 目录扫描
+# ====================================================================
 
 def scan_raw_pdfs() -> List[str]:
     """
-    扫描 data/raw/ 目录，返回所有 PDF 文件名（不含扩展名）。
-    不依赖 Test_X 命名格式，任意 PDF 文件名均可识别。
+    扫描 data/raw/ 目录，返回所有 PDF 的合规名称列表（不含扩展名）。
+
+    不修改原始 PDF 文件，仅返回 sanitize 后的名称。
+    通过 path_utils.get_raw_pdf_path(safe_name) 可反查原始文件路径。
+
+    Returns:
+        合规后的论文名称列表（去重、排序）
     """
     if not RAW_PDF_DIR.exists():
         return []
-    return sorted([
-        f.stem for f in RAW_PDF_DIR.iterdir()
-        if f.is_file() and f.suffix.lower() == ".pdf"
-    ])
+    # 使用 set 去重（不同原始文件名 sanitize 后可能相同）
+    safe_names = set()
+    for f in RAW_PDF_DIR.iterdir():
+        if f.is_file() and f.suffix.lower() == ".pdf":
+            safe_names.add(sanitize_paper_name(f.stem))
+    return sorted(safe_names)
 
 
 def scan_parsed_papers() -> List[str]:

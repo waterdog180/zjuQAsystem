@@ -13,7 +13,10 @@ import base64
 from pathlib import Path
 from typing import List
 
-from ..config.paths import get_parsed_images, get_parsed_images_cleaned
+from ..utils.logging import get_logger
+from ..utils.path_utils import get_parsed_images, get_parsed_images_cleaned
+
+logger = get_logger(__name__)
 
 
 def encode_image(image_path: Path) -> str:
@@ -59,7 +62,7 @@ def load_images_for_paper(
         source = "original"
 
     if not images_dir.exists():
-        print(f"  [图片] 警告: 图片目录不存在 {images_dir}")
+        logger.warning(f"图片目录不存在 {images_dir}")
         return []
 
     image_files = sorted(images_dir.glob("*.jpg")) + sorted(images_dir.glob("*.png"))
@@ -79,5 +82,5 @@ def load_images_for_paper(
             "image_url": {"url": f"data:{mime};base64,{b64}"},
         })
 
-    print(f"  [图片] 加载 {len(image_contents)} 张页面图片（来源: {source}）")
+    logger.debug(f"加载 {len(image_contents)} 张页面图片（来源: {source}）")
     return image_contents

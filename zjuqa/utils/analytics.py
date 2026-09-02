@@ -27,9 +27,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from ..config.paths import EXTRACTED_DIR, get_paper_aggregated_path
+from ..config.paths import EXTRACTED_DIR
 from ..schemas.membrane import MembraneData, ValueUnit
 from ..utils.io import load_json_safe, save_json
+from ..utils.path_utils import get_paper_aggregated_path
 from ..utils.scanner import scan_extracted_papers
 
 
@@ -170,6 +171,8 @@ def _load_all_membranes(verbose: bool = True) -> List[Tuple[str, MembraneData]]:
 def report_missing_data(
     output_json: Optional[str] = None,
     verbose: bool = True,
+    substances: Optional[List[str]] = None,
+    min_substance_freq: int = 50,
 ) -> dict:
     """
     统计不同论文提取数据的缺失情况。
@@ -195,16 +198,55 @@ def report_missing_data(
             print("[分析] 未找到任何已提取的膜数据，请先运行提取流程。")
         return {"total_membranes": 0, "note": "无数据"}
 
+    # --- 截留率物质筛选 ---
+    # 先统计所有物质的出现次数
+    all_substance_counter: Counter = Counter()
+    for _, mem in all_membranes:
+        if mem.rejections:
+            valid_rej = {k: v for k, v in mem.rejections.items() if v is not None}
+            for substance in valid_rej:
+                all_substance_counter[substance] += 1
+
+    # 确定筛选物质列表
+    if substances is None:
+        # 自动选取出现次数 > min_substance_freq 的物质
+        substances = [
+            sub for sub, cnt in all_substance_counter.most_common()
+            if cnt > min_substance_freq
+        ]
+        if substances and verbose:
+            print(f"[分析] 自动筛选出现次数>{min_substance_freq}的截留物质: {substances}")
+
+    # 筛选膜：rejections 中包含列表中任一物质（并集）
+    filtered_membranes: List[Tuple[str, MembraneData]] = []
+    if substances:
+        substance_set = set(substances)
+        for paper_name, mem in all_membranes:
+            if mem.rejections:
+                valid_rej = {k: v for k, v in mem.rejections.items() if v is not None}
+                if substance_set & set(valid_rej.keys()):
+                    filtered_membranes.append((paper_name, mem))
+        if verbose:
+            print(f"[分析] 截留物质筛选: {len(filtered_membranes)}/{total_membranes} 种膜包含指定物质")
+    else:
+        filtered_membranes = all_membranes
+
+    total_membranes = len(filtered_membranes)
+    if total_membranes == 0:
+        if verbose:
+            print("[分析] 筛选后无符合条件的膜数据。")
+        return {"total_membranes": 0, "note": "筛选后无数据", "filter_substances": substances}
+
     # 按论文分组
     papers_membranes: Dict[str, List[MembraneData]] = defaultdict(list)
-    for paper_name, mem in all_membranes:
+    for paper_name, mem in filtered_membranes:
         papers_membranes[paper_name].append(mem)
 
     # --- 维度1：每个参数的整体缺失率 ---
     field_missing_count: Dict[str, int] = {f: 0 for f in ALL_VALUE_FIELDS}
     field_present_count: Dict[str, int] = {f: 0 for f in ALL_VALUE_FIELDS}
 
-    for _, mem in all_membranes:
+    for _, mem in filtered_membranes:
         for field in ALL_VALUE_FIELDS:
             if getattr(mem, field) is not None:
                 field_present_count[field] += 1
@@ -212,12 +254,12 @@ def report_missing_data(
                 field_missing_count[field] += 1
 
     # substrate 和 membrane_id 单独统计
-    substrate_present = sum(1 for _, m in all_membranes if m.substrate)
+    substrate_present = sum(1 for _, m in filtered_membranes if m.substrate)
 
     # --- 维度2：截留率物质覆盖统计 ---
     substance_counter: Counter = Counter()
     membranes_with_rejections = 0
-    for _, mem in all_membranes:
+    for _, mem in filtered_membranes:
         if mem.rejections:
             # 只统计有实际值（非 None）的截留率，排除 {"NaCl": None} 这种空值
             valid_rej = {k: v for k, v in mem.rejections.items() if v is not None}
@@ -226,7 +268,19 @@ def report_missing_data(
                 for substance in valid_rej:
                     substance_counter[substance] += 1
 
-    # --- 维度3：每篇论文的缺失情况 ---
+    # --- 维度3：数据全部完整的膜数量 ---
+    # 定义：所有 ALL_VALUE_FIELDS 字段非 None + substrate 非空
+    fully_complete_membranes = 0
+    fully_complete_list: List[str] = []
+    for paper_name, mem in filtered_membranes:
+        all_fields_present = all(
+            getattr(mem, field) is not None for field in ALL_VALUE_FIELDS
+        )
+        if all_fields_present and mem.substrate:
+            fully_complete_membranes += 1
+            fully_complete_list.append(f"{paper_name}/{mem.membrane_id}")
+
+    # --- 维度4：每篇论文的缺失情况 ---
     paper_reports: Dict[str, dict] = {}
     for paper_name, membranes in papers_membranes.items():
         n_membranes = len(membranes)
@@ -262,6 +316,11 @@ def report_missing_data(
 
     # --- 组装报告 ---
     report = {
+        "filter": {
+            "substances": substances,
+            "min_substance_freq": min_substance_freq if not substances else None,
+            "filtered_from_total": len(all_membranes),
+        },
         "summary": {
             "total_papers": len(papers_membranes),
             "total_membranes": total_membranes,
@@ -272,6 +331,10 @@ def report_missing_data(
             "membranes_with_rejections": membranes_with_rejections,
             "rejections_coverage_pct": round(
                 membranes_with_rejections / total_membranes * 100, 1
+            ),
+            "fully_complete_membranes": fully_complete_membranes,
+            "fully_complete_rate_pct": round(
+                fully_complete_membranes / total_membranes * 100, 1
             ),
         },
         "field_missing_rate": {
@@ -286,6 +349,7 @@ def report_missing_data(
         },
         "category_missing_rate": category_missing,
         "rejection_substances": dict(substance_counter.most_common()),
+        "fully_complete_list": fully_complete_list,
         "per_paper": paper_reports,
     }
 
@@ -310,12 +374,18 @@ def _print_missing_report(report: dict) -> None:
     print("=" * 70)
 
     print(f"\n【总览】")
+    # 筛选信息
+    if report.get("filter", {}).get("substances"):
+        print(f"  筛选截留物质: {', '.join(report['filter']['substances'])}")
+        print(f"  筛选范围: {s['total_membranes']}/{report['filter']['filtered_from_total']} 种膜")
     print(f"  论文数: {s['total_papers']}")
     print(f"  膜总数: {s['total_membranes']}")
     print(f"  支撑层材料有值: {s['substrate_present']}/{s['total_membranes']} "
           f"(缺失率 {s['substrate_missing_rate_pct']}%)")
     print(f"  有截留率数据的膜: {s['membranes_with_rejections']}/{s['total_membranes']} "
           f"(覆盖率 {s['rejections_coverage_pct']}%)")
+    print(f"  数据全部完整的膜: {s['fully_complete_membranes']}/{s['total_membranes']} "
+          f"(完整率 {s['fully_complete_rate_pct']}%)")
 
     print(f"\n【按类别缺失率】")
     for category, info in report["category_missing_rate"].items():
@@ -526,6 +596,54 @@ def _print_unit_report(report: dict) -> None:
 
 
 # ====================================================================
+# 综合报告入口
+# ====================================================================
+
+def run_all_reports(
+    output_dir: Optional[str] = None,
+    verbose: bool = True,
+    substances: Optional[List[str]] = None,
+) -> dict:
+    """
+    执行所有分析报告，一次性输出数据缺失统计和单位分布统计。
+
+    Args:
+        output_dir:  报告输出目录，None 时不保存文件
+        verbose:     是否打印到控制台
+        substances:  截留率物质筛选列表，传递给 report_missing_data
+
+    Returns:
+        {"missing": missing_report, "units": unit_report}
+    """
+    results = {}
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("运行全部分析报告")
+        print("=" * 70)
+
+    # 报告1：数据缺失统计
+    missing_output = f"{output_dir}/missing_report.json" if output_dir else None
+    results["missing"] = report_missing_data(
+        output_json=missing_output,
+        verbose=verbose,
+        substances=substances,
+    )
+
+    # 报告2：单位分布统计
+    units_output = f"{output_dir}/unit_report.json" if output_dir else None
+    results["units"] = report_unit_distribution(
+        output_json=units_output,
+        verbose=verbose,
+    )
+
+    if verbose and output_dir:
+        print(f"\n[分析] 全部报告已保存至: {output_dir}/")
+
+    return results
+
+
+# ====================================================================
 # 命令行入口
 # ====================================================================
 
@@ -536,7 +654,10 @@ if __name__ == "__main__":
         report_unit_distribution()
     elif len(sys.argv) > 1 and sys.argv[1] == "missing":
         report_missing_data()
+    elif len(sys.argv) > 1 and sys.argv[1] == "all":
+        run_all_reports()
     else:
         print("用法:")
         print("  python -m zjuqa.utils.analytics missing   # 数据缺失统计")
         print("  python -m zjuqa.utils.analytics units     # 单位分布统计")
+        print("  python -m zjuqa.utils.analytics all       # 全部报告")
