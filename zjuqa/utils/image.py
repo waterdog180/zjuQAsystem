@@ -13,7 +13,7 @@ import base64
 from pathlib import Path
 from typing import List
 
-from ..config.paths import get_parsed_images
+from ..config.paths import get_parsed_images, get_parsed_images_cleaned
 
 
 def encode_image(image_path: Path) -> str:
@@ -37,6 +37,9 @@ def load_images_for_paper(
     """
     加载某篇论文的所有页面图片，编码为多模态消息格式。
 
+    优先从 images_cleaned/ 加载（image_cleaner 清洗后的图片，按文中顺序重编号，小图已删除）；
+    若该目录不存在或为空，则回退到原始 images/ 目录。
+
     Args:
         paper_name: 论文名称
         max_images: 最大图片数量，超长论文截断避免 token 超限
@@ -45,7 +48,16 @@ def load_images_for_paper(
         多模态消息中的图片内容列表，每项为：
         {"type": "image_url", "image_url": {"url": "data:image/...;base64,..."}}
     """
+    # 优先使用清洗后的图片目录
+    cleaned_dir = get_parsed_images_cleaned(paper_name)
     images_dir = get_parsed_images(paper_name)
+
+    if cleaned_dir.exists() and any(cleaned_dir.iterdir()):
+        images_dir = cleaned_dir
+        source = "cleaned"
+    else:
+        source = "original"
+
     if not images_dir.exists():
         print(f"  [图片] 警告: 图片目录不存在 {images_dir}")
         return []
@@ -67,5 +79,5 @@ def load_images_for_paper(
             "image_url": {"url": f"data:{mime};base64,{b64}"},
         })
 
-    print(f"  [图片] 加载 {len(image_contents)} 张页面图片")
+    print(f"  [图片] 加载 {len(image_contents)} 张页面图片（来源: {source}）")
     return image_contents

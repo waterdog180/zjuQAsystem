@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 
 
-RAW_PDF_DIR = ROOT_DIR / "data" / "raw"
+RAW_PDF_DIR = ROOT_DIR / "data" / "raw_4"
 """原始 PDF 存放目录。"""
 
 PARSED_DIR = ROOT_DIR / "data" / "parsed"
@@ -73,8 +73,13 @@ def get_parsed_text(paper_name: str) -> Path:
 
 
 def get_parsed_images(paper_name: str) -> Path:
-    """获取某篇论文的页面图片目录路径。"""
+    """获取某篇论文的页面图片目录路径（MinerU 原始输出）。"""
     return get_parsed_dir(paper_name) / "images"
+
+
+def get_parsed_images_cleaned(paper_name: str) -> Path:
+    """获取某篇论文清洗后的图片目录路径（image_cleaner 输出，按文中顺序重编号，小图已删除）。"""
+    return get_parsed_dir(paper_name) / "images_cleaned"
 
 
 def get_identified_dir(paper_name: str) -> Path:

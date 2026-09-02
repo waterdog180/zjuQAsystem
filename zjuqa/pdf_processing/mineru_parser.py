@@ -134,6 +134,12 @@ def parse_pdf(pdf_path: str | Path, force: bool = False) -> Optional[Path]:
 
     if text_path.exists():
         print(f"  [解析] 完成: {paper_name} → {text_path}")
+        # 解析成功后自动清洗图片（删除小图+按文中顺序重编号）
+        try:
+            from .image_cleaner import clean_paper_images
+            clean_paper_images(paper_name, verbose=True)
+        except Exception as e:
+            print(f"  [图片清洗] {paper_name} 清洗失败（不影响解析结果）: {e}")
         return text_path
     else:
         print(f"  [解析] 警告: 解析后未找到输出文件 {text_path}")
