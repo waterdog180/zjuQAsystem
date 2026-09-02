@@ -17,6 +17,7 @@ sanitize 后的合规名称，但不修改原始文件。通过 path_utils.get_r
     papers = scan_raw_pdfs()  # 自动发现 data/raw/ 下所有 PDF（返回合规名称）
 """
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -35,34 +36,54 @@ from .path_utils import get_extracted_dir
 # 文件名校验（不修改原始文件，仅用于内部名称规范化）
 # ====================================================================
 
-# 不合规字符：空格、路径分隔符、Windows 非法文件名字符、连续特殊字符
-_ILLEGAL_CHARS_PATTERN = re.compile(r'[\s\\/:*?"<>|]+')
+# 只保留 ASCII 字母、数字、下划线、连字符、点号
+# 其他字符（空格、中文、特殊Unicode如 ‐ U+2010、Windows非法字符等）全部替换为下划线
+_SAFE_CHARS_PATTERN = re.compile(r'[^a-zA-Z0-9_.\-]+')
 # 连续下划线合并
 _MULTI_UNDERSCORE_PATTERN = re.compile(r'_+')
+# 默认最大名称长度（避免 Windows MAX_PATH 260 字符限制）
+_DEFAULT_MAX_NAME_LENGTH = 80
 
 
-def sanitize_paper_name(name: str) -> str:
+def sanitize_paper_name(name: str, max_length: int = _DEFAULT_MAX_NAME_LENGTH) -> str:
     """
     将论文名称转换为合规的文件/目录名（不修改原始文件，仅内部使用）。
 
     规则：
-      - 空格及其他非法字符（\\ / : * ? " < > |）替换为下划线
+      - 只保留 ASCII 字母、数字、下划线、连字符、点号
+      - 其他字符（空格、中文、特殊Unicode如 ‐、Windows非法字符等）替换为下划线
       - 连续下划线合并为一个
       - 去除首尾下划线和点号
+      - 长度超过 max_length 时截断并附加 6 位哈希避免冲突
       - 空名称返回 "untitled"
 
     Args:
-        name: 原始论文名称（PDF 文件名不含扩展名）
+        name:       原始论文名称（PDF 文件名不含扩展名）
+        max_length: 最大名称长度，默认 80（避免 Windows MAX_PATH 限制）
 
     Returns:
         合规后的名称
     """
     if not name or not name.strip():
         return "untitled"
-    cleaned = _ILLEGAL_CHARS_PATTERN.sub("_", name)
+
+    # 非安全字符 → 下划线
+    cleaned = _SAFE_CHARS_PATTERN.sub("_", name)
+    # 连续下划线合并
     cleaned = _MULTI_UNDERSCORE_PATTERN.sub("_", cleaned)
+    # 去除首尾下划线和点号
     cleaned = cleaned.strip("_.")
-    return cleaned or "untitled"
+
+    if not cleaned:
+        return "untitled"
+
+    # 长度限制：超长时截断并附加短哈希
+    if len(cleaned) > max_length:
+        short_hash = hashlib.md5(name.encode("utf-8")).hexdigest()[:6]
+        # 保留前 max_length - 7 个字符 + "_" + 6位哈希
+        cleaned = cleaned[:max_length - 7] + "_" + short_hash
+
+    return cleaned
 
 
 # ====================================================================

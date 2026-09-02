@@ -63,7 +63,17 @@ def _mineru_parse_single(pdf_path: Path, output_dir: Path, paper_name: str) -> N
     # 延迟导入：避免 import 本模块时就加载 MinerU（重依赖）
     from mineru.cli.common import do_parse, read_fn
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # 显式创建完整输出目录，避免 MinerU 内部因路径超长/层级问题创建失败
+    output_subdir = output_dir / paper_name / "auto"
+    output_subdir.mkdir(parents=True, exist_ok=True)
+
+    # 路径长度安全检查（Windows MAX_PATH = 260）
+    expected_md_path = output_subdir / f"{paper_name}.md"
+    if len(str(expected_md_path)) > 250:
+        logger.warning(
+            f"输出路径过长 ({len(str(expected_md_path))} 字符)，"
+            f"可能导致 Windows 文件创建失败: {expected_md_path}"
+        )
 
     # 步骤1：读取 PDF 为字节流（MinerU API 要求传入 bytes，而非文件路径）
     pdf_bytes = read_fn(pdf_path)
