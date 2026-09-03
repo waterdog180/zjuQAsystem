@@ -1,15 +1,16 @@
 """
 logging.py —— 统一日志配置。
 
-详细信息（带时间戳）保存到 logs/ 目录下的日志文件，
-控制台只输出关键步骤和进度条（由 progress.py 控制）。
+详细信息（带时间戳）保存到 logs/ 目录下的日志文件（DEBUG 级别全量记录）。
+控制台只输出 WARNING 及以上级别（错误、警告），通过 tqdm.write 安全写入，
+不干扰进度条显示。关键流程统计由各模块直接 print 输出。
 
 使用说明：
     from zjuqa.utils.logging import get_logger
     logger = get_logger(__name__)
-    logger.info("处理开始")
-    logger.warning("数据异常")
-    logger.error("处理失败", exc_info=True)
+    logger.info("处理开始")        # 只写日志文件，不显示控制台
+    logger.warning("数据异常")     # 写文件 + 控制台显示
+    logger.error("处理失败", exc_info=True)  # 写文件 + 控制台显示
 """
 
 import logging
@@ -34,24 +35,43 @@ def _get_log_file() -> Path:
     return _LOG_FILE
 
 
+class _TqdmSafeStreamHandler(logging.StreamHandler):
+    """
+    自定义控制台日志处理器，使用 tqdm.write 输出，避免与 tqdm 进度条冲突。
+    tqdm 未安装时自动 fallback 到标准 StreamHandler。
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            try:
+                from tqdm import tqdm
+                tqdm.write(msg, file=self.stream)
+            except ImportError:
+                self.stream.write(msg + self.terminator)
+                self.stream.flush()
+        except Exception:
+            self.handleError(record)
+
+
 def get_logger(name: str = "zjuqa", level: int = logging.INFO) -> logging.Logger:
     """
     获取配置好的 logger 实例。
 
-    日志同时输出到：
-      1. 文件：logs/zjuqa_YYYYMMDD_HHMMSS.log（带时间戳，详细信息）
-      2. 控制台：stdout（关键步骤，与进度条配合）
+    日志输出到两个位置：
+      1. 文件：logs/zjuqa_YYYYMMDD_HHMMSS.log（DEBUG 级别，带时间戳，全量详细信息）
+      2. 控制台：仅 WARNING 及以上（通过 tqdm.write 安全输出，不干扰进度条）
 
     Args:
         name:  logger 名称，通常传 __name__
-        level: 日志级别，默认 INFO
+        level: 日志级别，默认 INFO（控制文件输出的最低级别）
 
     Returns:
         配置好的 Logger 实例
     """
     logger = logging.getLogger(name)
     if not logger.handlers:
-        # 文件处理器（详细日志，带时间戳）
+        # 文件处理器（DEBUG 级别，全量详细日志，带时间戳）
         file_handler = logging.FileHandler(_get_log_file(), encoding="utf-8")
         file_formatter = logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -61,14 +81,14 @@ def get_logger(name: str = "zjuqa", level: int = logging.INFO) -> logging.Logger
         file_handler.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
 
-        # 控制台处理器（关键步骤）
-        console_handler = logging.StreamHandler(sys.stdout)
+        # 控制台处理器（仅 WARNING 及以上，tqdm 安全写入）
+        console_handler = _TqdmSafeStreamHandler(sys.stdout)
         console_formatter = logging.Formatter(
             "%(asctime)s [%(levelname)s] %(message)s",
             datefmt="%H:%M:%S",
         )
         console_handler.setFormatter(console_formatter)
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.WARNING)
         logger.addHandler(console_handler)
 
         logger.setLevel(logging.DEBUG)
